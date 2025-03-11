@@ -1,0 +1,22 @@
+{
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build"
+    },
+    "devDependencies": {
+        "axios": "^1.8.2",
+        "laravel-vite-plugin": "^1.0",
+        "vite": "^6.2.1"
+    },
+    "dependencies": {
+        "@chenfengyuan/vue-countdown": "^2.0.0",
+        "@inertiajs/vue3": "^1.0.15",
+        "@tinymce/tinymce-vue": "^6.1.0",
+        "@vitejs/plugin-vue": "^5.0.4",
+        "@vuepic/vue-datepicker": "^3.2.2",
+        "vue": "^3.4.21",
+        "vue-sweetalert2": "^5.0.2"
+    }
+}
