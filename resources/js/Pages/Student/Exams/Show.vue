@@ -30,11 +30,11 @@
                             <tbody>
                                 <tr v-for="(answer, index) in answer_order" :key="index">
                                     <td width="50" style="padding: 10px;">
-                                        
+
                                         <button v-if="answer == question_active.answer" class="btn btn-info btn-sm w-100 shdaow">{{ options[index] }}</button>
 
                                         <button v-else @click.prevent="submitAnswer(question_active.question.exam.id, question_active.question.id, answer)" class="btn btn-outline-info btn-sm w-100 shdaow">{{ options[index] }}</button>
-                                            
+
                                     </td>
                                     <td style="padding: 10px;">
                                         <p v-html="question_active.question['option_'+answer]"></p>
@@ -130,181 +130,203 @@
 </template>
 
 <script>
-    //import layout student
-    import LayoutStudent from '../../../Layouts/Student.vue';
+//import layout student
+import LayoutStudent from '../../../Layouts/Student.vue';
 
-    //import Head and Link from Inertia
-    import {
+//import Head and Link from Inertia
+import {
+    Head,
+    Link,
+    router
+} from '@inertiajs/vue3';
+
+//import ref
+import {
+    onUnmounted,
+    onMounted,
+
+    ref,
+} from 'vue';
+
+//import VueCountdown
+import VueCountdown from '@chenfengyuan/vue-countdown';
+
+//import axios
+import axios from 'axios';
+
+//import sweet alert2
+import Swal from 'sweetalert2';
+
+export default {
+    //layout
+    layout: LayoutStudent,
+
+    //register components
+    components: {
         Head,
         Link,
-        router
-    } from '@inertiajs/vue3';
+        VueCountdown
+    },
 
-    //import ref
-    import {
-        ref
-    } from 'vue';
+    //props
+    props: {
+        id: Number,
+        page: Number,
+        exam_group: Object,
+        all_questions: Array,
+        question_answered: Number,
+        question_active: Object,
+        answer_order: Array,
+        duration: Object,
+    },
 
-    //import VueCountdown
-    import VueCountdown from '@chenfengyuan/vue-countdown';
+    //composition API
+    setup(props) {
+        let controller;
+        onMounted(() => {
+            controller = new AbortController();
+            const { signal } = controller;
 
-    //import axios
-    import axios from 'axios';
-    
-    //import sweet alert2
-    import Swal from 'sweetalert2';
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === "hidden") {
+                    // console.log("visibilitychange: hidden");
+                }
+            }, { signal });
 
-    export default {
-        //layout
-        layout: LayoutStudent,
+            window.addEventListener("blur", () => {
+                console.log("window: blur")
+            }, { signal })
+        })
 
-        //register components
-        components: {
-            Head,
-            Link,
-            VueCountdown
-        },
+        onUnmounted(() => {
+            controller.abort()
+        })
 
-        //props
-        props: {
-            id: Number,
-            page: Number,
-            exam_group: Object,
-            all_questions: Array,
-            question_answered: Number,
-            question_active: Object,
-            answer_order: Array,
-            duration: Object,
-        },
+        //define options for answer
+        let options = ["A", "B", "C", "D", "E"];
 
-        //composition API
-        setup(props) {
+        //define state counter
+        const counter = ref(0);
 
-            //define options for answer
-            let options = ["A", "B", "C", "D", "E"];
+        //define state duration
+        const duration = ref(props.duration.duration);
 
-            //define state counter
-            const counter = ref(0);
+        //handleChangeDuration
+        const handleChangeDuration = (() => {
 
-            //define state duration
-            const duration = ref(props.duration.duration);
+            //decrement duration
+            duration.value = duration.value - 1000;
 
-            //handleChangeDuration
-            const handleChangeDuration = (() => {
+            //increment counter
+            counter.value = counter.value + 1;
 
-                //decrement duration
-                duration.value = duration.value - 1000;
+            //cek jika durasi di atas 0
+            if (duration.value > 0) {
 
-                //increment counter
-                counter.value = counter.value + 1;
+                //update duration if 10 seconds
+                if (counter.value % 10 == 1) {
 
-                //cek jika durasi di atas 0
-                if (duration.value > 0) {
-
-                    //update duration if 10 seconds
-                    if (counter.value % 10 == 1) {
-
-                        //update duration
-                        axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                            duration: duration.value
-                        })
-
-                    }
+                    //update duration
+                    axios.put(`/student/exam-duration/update/${props.duration.id}`, {
+                        duration: duration.value
+                    })
 
                 }
 
-            });
-
-            //metohd prevPage
-            const prevPage = (() => {
-
-                //update duration
-                axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                    duration: duration.value
-                });
-
-                //redirect to prevPage
-                router.get(`/student/exam/${props.id}/${props.page - 1}`);
-
-            });
-
-            //method nextPage
-            const nextPage = (() => {
-
-                //update duration
-                axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                    duration: duration.value
-                });
-
-                //redirect to nextPage
-                router.get(`/student/exam/${props.id}/${props.page + 1}`);
-            });
-
-            //method clickQuestion
-            const clickQuestion = ((index) => {
-
-                //update duration
-                axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                    duration: duration.value
-                });
-
-                //redirect to questin
-                router.get(`/student/exam/${props.id}/${index + 1}`);
-            });
-
-            //method submit answer
-            const submitAnswer = ((exam_id, question_id, answer) => {
-
-                router.post('/student/exam-answer', {
-                    exam_id: exam_id,
-                    exam_session_id: props.exam_group.exam_session.id,
-                    question_id: question_id,
-                    answer: answer,
-                    duration: duration.value
-                });
-
-            });
-
-            //define state modal
-            const showModalEndExam      = ref(false);
-            const showModalEndTimeExam  = ref(false);
-
-            //method endExam
-            const endExam = (() => {
-
-                router.post('/student/exam-end', {
-                    exam_group_id: props.exam_group.id,
-                    exam_id: props.exam_group.exam.id,
-                    exam_session_id: props.exam_group.exam_session.id,
-                });
-
-                //show success alert
-                Swal.fire({
-                    title: 'Success!',
-                    text: 'Ujian Selesai!.',
-                    icon: 'success',
-                    showConfirmButton: false,
-                    timer: 4000
-                });           
-
-            });
-            
-            //return
-            return {
-                options,
-                duration,
-                handleChangeDuration,
-                prevPage,
-                nextPage,
-                clickQuestion,
-                submitAnswer,
-                showModalEndExam,
-                showModalEndTimeExam,
-                endExam,
             }
 
+        });
+
+        //metohd prevPage
+        const prevPage = (() => {
+
+            //update duration
+            axios.put(`/student/exam-duration/update/${props.duration.id}`, {
+                duration: duration.value
+            });
+
+            //redirect to prevPage
+            router.get(`/student/exam/${props.id}/${props.page - 1}`);
+
+        });
+
+        //method nextPage
+        const nextPage = (() => {
+
+            //update duration
+            axios.put(`/student/exam-duration/update/${props.duration.id}`, {
+                duration: duration.value
+            });
+
+            //redirect to nextPage
+            router.get(`/student/exam/${props.id}/${props.page + 1}`);
+        });
+
+        //method clickQuestion
+        const clickQuestion = ((index) => {
+
+            //update duration
+            axios.put(`/student/exam-duration/update/${props.duration.id}`, {
+                duration: duration.value
+            });
+
+            //redirect to questin
+            router.get(`/student/exam/${props.id}/${index + 1}`);
+        });
+
+        //method submit answer
+        const submitAnswer = ((exam_id, question_id, answer) => {
+
+            router.post('/student/exam-answer', {
+                exam_id: exam_id,
+                exam_session_id: props.exam_group.exam_session.id,
+                question_id: question_id,
+                answer: answer,
+                duration: duration.value
+            });
+
+        });
+
+        //define state modal
+        const showModalEndExam      = ref(false);
+        const showModalEndTimeExam  = ref(false);
+
+        //method endExam
+        const endExam = (() => {
+
+            router.post('/student/exam-end', {
+                exam_group_id: props.exam_group.id,
+                exam_id: props.exam_group.exam.id,
+                exam_session_id: props.exam_group.exam_session.id,
+            });
+
+            //show success alert
+            Swal.fire({
+                title: 'Success!',
+                text: 'Ujian Selesai!.',
+                icon: 'success',
+                showConfirmButton: false,
+                timer: 4000
+            });
+
+        });
+
+        //return
+        return {
+            options,
+            duration,
+            handleChangeDuration,
+            prevPage,
+            nextPage,
+            clickQuestion,
+            submitAnswer,
+            showModalEndExam,
+            showModalEndTimeExam,
+            endExam,
         }
+
     }
+}
 
 </script>
 
