@@ -357,26 +357,30 @@ class ExamController extends Controller
     {
         $studentId = auth()->guard('student')->id();
 
-        //update duration
         $grade = Grade::where('exam_id', $request->exam_id)
-                ->where('exam_session_id', $request->exam_session_id)
-                ->where('student_id', $studentId)
-                ->first();
+            ->where('exam_session_id', $request->exam_session_id)
+            ->where('student_id', $studentId)
+            ->first();
 
         if(!$grade) {
             return redirect()->route('student.dashboard');
         }
 
-        if($grade->end_time) {
-            $exam_group = $this->resolveExamGroup($grade);
-            if ($exam_group) {
-                return redirect()->route('student.exams.resultExam', $exam_group->id);
+        $exam_group = $this->resolveExamGroup($grade);
+
+        if ($grade->end_time) {
+            $redirectTo = $exam_group ? route('student.exams.resultExam', $exam_group->id) : route('student.dashboard');
+
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Ujian telah berakhir.',
+                    'redirect_to' => $redirectTo,
+                ], 423);
             }
 
-            return redirect()->route('student.dashboard');
+            return redirect($redirectTo);
         }
-
-        $exam_group = $this->resolveExamGroup($grade);
 
         if(!$exam_group) {
             return redirect()->route('student.dashboard');
@@ -386,48 +390,43 @@ class ExamController extends Controller
         $deviceInfo = (array) $request->input('device_info', []);
 
         if ($violation = $this->ensureSingleDevice($grade, $deviceToken, $deviceInfo)) {
-            return redirect($violation['redirect_to'] ?? route('student.dashboard'))
-                ->with('error', $violation['message']);
+            return $this->violationResponse($request, $violation);
         }
 
         $windowState = $this->examWindowState($exam_group);
 
         if ($windowState !== 'active') {
             $this->finalizeGrade($grade, $exam_group);
-            return redirect()->route('student.exams.resultExam', $exam_group->id)
-                ->with('error', 'Sesi ujian tidak tersedia.');
+
+            return $this->violationResponse($request, [
+                'message' => 'Sesi ujian tidak tersedia.',
+                'redirect_to' => route('student.exams.resultExam', $exam_group->id),
+            ]);
         }
 
         $remaining = $this->syncRemainingDuration($grade, $exam_group);
 
         if ($remaining <= 0) {
             $this->finalizeGrade($grade->refresh(), $exam_group);
-            return redirect()->route('student.exams.resultExam', $exam_group->id)
-                ->with('error', 'Durasi ujian telah habis.');
+
+            return $this->violationResponse($request, [
+                'message' => 'Durasi ujian telah habis.',
+                'redirect_to' => route('student.exams.resultExam', $exam_group->id),
+            ]);
         }
 
-        //get question
-        $question = Question::find($request->question_id);
-        
-        if(!$question) {
-            return redirect()->back();
-        }
+        $questionId = (int) $request->question_id;
+        $answerValue = (int) $request->answer;
 
-        //cek apakah jawaban sudah benar
-        $result = ($question->answer == $request->answer) ? 'Y' : 'N';
+        $this->handleAnswerSubmission($grade->refresh(), $exam_group, $questionId, $answerValue);
 
-        //get answer
-        $answer   = Answer::where('exam_id', $request->exam_id)
-                    ->where('exam_session_id', $request->exam_session_id)
-                    ->where('student_id', $studentId)
-                    ->where('question_id', $request->question_id)
-                    ->first();
-
-        //update jawaban
-        if($answer) {
-            $answer->answer     = $request->answer;
-            $answer->is_correct = $result;
-            $answer->update();
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'question_id' => $questionId,
+                'answer' => $answerValue,
+                'remaining' => $remaining,
+            ]);
         }
 
         return redirect()->back();
@@ -469,8 +468,7 @@ class ExamController extends Controller
         $deviceInfo = (array) $request->input('device_info', []);
 
         if ($violation = $this->ensureSingleDevice($grade, $deviceToken, $deviceInfo)) {
-            return redirect($violation['redirect_to'] ?? route('student.dashboard'))
-                ->with('error', $violation['message']);
+            return $this->violationResponse($request, $violation);
         }
 
         $this->syncRemainingDuration($grade, $exam_group);
@@ -622,6 +620,139 @@ class ExamController extends Controller
     protected function resolveExamGroupId(Grade $grade): ?int
     {
         return optional($this->resolveExamGroup($grade))->id;
+    }
+
+    /**
+     * Standardize violation responses for both JSON and redirect flows.
+     */
+    protected function violationResponse(Request $request, array $violation)
+    {
+        $redirectTo = $violation['redirect_to'] ?? route('student.dashboard');
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => false,
+                'message' => $violation['message'] ?? 'Sesi ujian dihentikan.',
+                'redirect_to' => $redirectTo,
+            ], 423);
+        }
+
+        return redirect($redirectTo)->with('error', $violation['message'] ?? 'Sesi ujian dihentikan.');
+    }
+
+    /**
+     * Persist a student's answer for a specific question.
+     */
+    protected function handleAnswerSubmission(Grade $grade, ExamGroup $exam_group, int $questionId, int $answerValue): void
+    {
+        $answerValue = max(0, min(5, $answerValue));
+
+        $question = Question::find($questionId);
+
+        if (!$question || $question->exam_id !== $grade->exam_id) {
+            return;
+        }
+
+        $answer = Answer::where('exam_id', $grade->exam_id)
+            ->where('exam_session_id', $grade->exam_session_id)
+            ->where('student_id', $grade->student_id)
+            ->where('question_id', $questionId)
+            ->first();
+
+        if (!$answer) {
+            return;
+        }
+
+        $answer->answer = $answerValue;
+        $answer->is_correct = ($answerValue !== 0 && (int) $question->answer === $answerValue) ? 'Y' : 'N';
+        $answer->save();
+    }
+
+    public function autoSave(Request $request)
+    {
+        $studentId = auth()->guard('student')->id();
+
+        $validated = $request->validate([
+            'exam_id' => 'required|integer',
+            'exam_session_id' => 'required|integer',
+            'grade_id' => 'required|integer',
+            'answers' => 'required|array|min:1',
+            'answers.*.question_id' => 'required|integer',
+            'answers.*.answer' => 'required|integer|min:0|max:5',
+            'device_token' => 'nullable|string|max:100',
+            'device_info' => 'nullable|array',
+        ]);
+
+        $grade = Grade::where('id', $validated['grade_id'])
+            ->where('exam_id', $validated['exam_id'])
+            ->where('exam_session_id', $validated['exam_session_id'])
+            ->where('student_id', $studentId)
+            ->first();
+
+        if (!$grade) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Sesi ujian tidak ditemukan.',
+                'redirect_to' => route('student.dashboard'),
+            ], 404);
+        }
+
+        $exam_group = $this->resolveExamGroup($grade);
+
+        if ($grade->end_time || !$exam_group) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Ujian telah berakhir.',
+                'redirect_to' => $exam_group ? route('student.exams.resultExam', $exam_group->id) : route('student.dashboard'),
+            ], 423);
+        }
+
+        $violation = $this->ensureSingleDevice($grade, $request->input('device_token'), (array) $request->input('device_info', []));
+        if ($violation) {
+            return response()->json([
+                'success' => false,
+                'message' => $violation['message'],
+                'redirect_to' => $violation['redirect_to'],
+            ], 423);
+        }
+
+        $windowState = $this->examWindowState($exam_group);
+
+        if ($windowState !== 'active') {
+            $this->finalizeGrade($grade, $exam_group);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Sesi ujian tidak tersedia.',
+                'redirect_to' => route('student.exams.resultExam', $exam_group->id),
+            ], 423);
+        }
+
+        $remaining = $this->syncRemainingDuration($grade, $exam_group);
+
+        if ($remaining <= 0) {
+            $this->finalizeGrade($grade->refresh(), $exam_group);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Durasi ujian telah habis.',
+                'redirect_to' => route('student.exams.resultExam', $exam_group->id),
+            ], 423);
+        }
+
+        $synced = [];
+        foreach ($validated['answers'] as $payload) {
+            $questionId = (int) $payload['question_id'];
+            $answerValue = (int) $payload['answer'];
+            $this->handleAnswerSubmission($grade->refresh(), $exam_group, $questionId, $answerValue);
+            $synced[] = $questionId;
+        }
+
+        return response()->json([
+            'success' => true,
+            'synced_answers' => $synced,
+            'remaining' => $remaining,
+        ]);
     }
 
     /**

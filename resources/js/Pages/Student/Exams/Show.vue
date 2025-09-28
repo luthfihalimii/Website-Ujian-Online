@@ -2,6 +2,9 @@
     <Head>
         <title>Ujian Dengan Nomor Soal : {{ page }} - Aplikasi Ujian Online</title>
     </Head>
+    <div v-if="isOffline" class="alert alert-warning border-0 shadow mb-4">
+        <i class="fa fa-wifi"></i> Koneksi terputus. Jawaban akan dikirim otomatis ketika koneksi kembali.
+    </div>
     <div class="row mb-5">
         <div class="col-md-7">
             <div class="card border-0 shadow">
@@ -31,9 +34,9 @@
                                 <tr v-for="(answer, index) in answer_order" :key="index">
                                     <td width="50" style="padding: 10px;">
 
-                                        <button v-if="answer == question_active.answer" class="btn btn-info btn-sm w-100 shdaow">{{ options[index] }}</button>
+                                        <button v-if="isOptionSelected(answer)" class="btn btn-info btn-sm w-100 shadow">{{ options[index] }}</button>
 
-                                        <button v-else @click.prevent="submitAnswer(question_active.question.exam.id, question_active.question.id, answer)" class="btn btn-outline-info btn-sm w-100 shdaow">{{ options[index] }}</button>
+                                        <button v-else @click.prevent="selectAnswer(question_active.question.id, answer)" class="btn btn-outline-info btn-sm w-100 shadow">{{ options[index] }}</button>
 
                                     </td>
                                     <td style="padding: 10px;">
@@ -58,7 +61,7 @@
                             <button v-if="page > 1" @click.prevent="prevPage" type="button" class="btn btn-gray-400 btn-sm btn-block mb-2">Sebelumnya</button>
                         </div>
                         <div class="text-end">
-                            <button v-if="page < Object.keys(all_questions).length" @click.prevent="nextPage" type="button" class="btn btn-gray-400 btn-sm">Selanjutnya</button>
+                            <button v-if="page < totalQuestions" @click.prevent="nextPage" type="button" class="btn btn-gray-400 btn-sm">Selanjutnya</button>
                         </div>
                     </div>
                 </div>
@@ -67,7 +70,7 @@
         <div class="col-md-5">
             <div class="card border-0 shadow">
                 <div class="card-header text-center">
-                    <div class="badge bg-success p-2"> {{ question_answered }} dikerjakan</div>
+                    <div class="badge bg-success p-2"> {{ answeredCount }} dikerjakan</div>
                 </div>
                 <div class="card-body" style="height: 330px;overflow-y: auto">
 
@@ -77,9 +80,9 @@
 
                                 <button @click.prevent="clickQuestion(index)" v-if="index+1 == page" class="btn btn-gray-400 btn-sm w-100">{{ index + 1 }}</button>
 
-                                <button @click.prevent="clickQuestion(index)" v-if="index+1 != page && question.answer == 0" class="btn btn-outline-info btn-sm w-100">{{ index + 1 }}</button>
+                                <button @click.prevent="clickQuestion(index)" v-if="index + 1 != page && !isQuestionAnswered(question)" class="btn btn-outline-info btn-sm w-100">{{ index + 1 }}</button>
 
-                                <button @click.prevent="clickQuestion(index)" v-if="index+1 != page && question.answer != 0" class="btn btn-info btn-sm w-100">{{ index + 1 }}</button>
+                                <button @click.prevent="clickQuestion(index)" v-if="index + 1 != page && isQuestionAnswered(question)" class="btn btn-info btn-sm w-100">{{ index + 1 }}</button>
                             </div>
                         </div>
                     </div>
@@ -138,7 +141,7 @@
         router
     } from '@inertiajs/vue3';
 
-    import { ref, onMounted, onBeforeUnmount } from 'vue';
+    import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 
     import VueCountdown from '@chenfengyuan/vue-countdown';
 
@@ -160,7 +163,6 @@
             page: Number,
             exam_group: Object,
             all_questions: Array,
-            question_answered: Number,
             question_active: Object,
             answer_order: Array,
             duration: Object,
@@ -181,6 +183,18 @@
             let isPersistingDuration = false;
             let deviceChangeListener = null;
             let originalGetDisplayMedia = null;
+            let isFlushing = false;
+            let autosaveInterval = null;
+
+            const examId = props.exam_group.exam.id;
+            const examSessionId = props.exam_group.exam_session.id;
+            const gradeId = props.duration?.id;
+            const storageKey = `exam_state_${gradeId}`;
+
+            const selectedAnswers = reactive({});
+            const pendingAnswers = reactive({});
+
+            const isOffline = ref(false);
 
             const deviceTokenKey = `exam_device_token_${props.exam_group?.id ?? 'unknown'}`;
             let initialToken = null;
@@ -216,6 +230,163 @@
                 timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             } : {};
 
+            const totalQuestions = computed(() => props.all_questions.length);
+            const answeredCount = computed(() => Object.keys(selectedAnswers).filter((key) => Number(selectedAnswers[key] ?? 0) !== 0).length);
+
+            const getQuestionKey = (questionId) => {
+                if (questionId === null || questionId === undefined) {
+                    return null;
+                }
+
+                return String(questionId);
+            };
+
+            const saveLocalState = () => {
+                if (typeof window === 'undefined') {
+                    return;
+                }
+
+                try {
+                    const answersCopy = {};
+                    Object.keys(selectedAnswers).forEach((key) => {
+                        answersCopy[key] = selectedAnswers[key];
+                    });
+
+                    const pendingCopy = {};
+                    Object.keys(pendingAnswers).forEach((key) => {
+                        pendingCopy[key] = pendingAnswers[key];
+                    });
+
+                    window.localStorage.setItem(storageKey, JSON.stringify({
+                        answers: answersCopy,
+                        pending: pendingCopy,
+                        duration: duration.value,
+                        updated_at: Date.now(),
+                    }));
+                } catch (_) {
+                    // ignore quota errors
+                }
+            };
+
+            const clearLocalState = () => {
+                if (typeof window === 'undefined') {
+                    return;
+                }
+
+                try {
+                    window.localStorage.removeItem(storageKey);
+                } catch (_) {
+                    // ignore
+                }
+            };
+
+            const loadLocalState = () => {
+                if (typeof window === 'undefined') {
+                    return;
+                }
+
+                try {
+                    const raw = window.localStorage.getItem(storageKey);
+                    if (!raw) {
+                        return;
+                    }
+
+                    const parsed = JSON.parse(raw);
+
+                    if (parsed.answers) {
+                        Object.entries(parsed.answers).forEach(([key, value]) => {
+                            const numeric = Number(value);
+                            if (!Number.isNaN(numeric)) {
+                                selectedAnswers[key] = numeric;
+                            }
+                        });
+                    }
+
+                    if (parsed.pending) {
+                        Object.entries(parsed.pending).forEach(([key, value]) => {
+                            const numeric = Number(value);
+                            if (!Number.isNaN(numeric)) {
+                                pendingAnswers[key] = numeric;
+                            }
+                        });
+                    }
+
+                    if (parsed.duration && Number.isFinite(parsed.duration)) {
+                        duration.value = Math.min(duration.value, Number(parsed.duration));
+                    }
+
+                    const serverAnswers = {};
+                    (props.all_questions ?? []).forEach((record) => {
+                        const key = getQuestionKey(record.question_id ?? record.question?.id);
+                        if (!key) {
+                            return;
+                        }
+                        serverAnswers[key] = Number(record.answer ?? 0);
+                    });
+
+                    Object.keys(selectedAnswers).forEach((key) => {
+                        const selected = Number(selectedAnswers[key] ?? 0);
+                        const serverValue = serverAnswers[key] ?? 0;
+                        if (selected !== serverValue && selected !== 0) {
+                            pendingAnswers[key] = selected;
+                        }
+                    });
+                } catch (_) {
+                    // ignore malformed storage
+                }
+            };
+
+            const recordedAnswer = (record) => {
+                if (!record) {
+                    return 0;
+                }
+                const questionId = getQuestionKey(record.question_id ?? record.question?.id);
+                if (!questionId) {
+                    return Number(record.answer ?? 0);
+                }
+                if (selectedAnswers[questionId] !== undefined) {
+                    return Number(selectedAnswers[questionId] ?? 0);
+                }
+                return Number(record.answer ?? 0);
+            };
+
+            const isOptionSelected = (option) => recordedAnswer(props.question_active) === option;
+            const isQuestionAnswered = (record) => recordedAnswer(record) !== 0;
+
+            const seedAnswersFromServer = (records = []) => {
+                records.forEach((record) => {
+                const questionId = getQuestionKey(record.question_id ?? record.question?.id);
+                if (!questionId) {
+                    return;
+                }
+
+                    const serverAnswer = Number(record.answer ?? 0);
+
+                    if (pendingAnswers[questionId] !== undefined) {
+                        return;
+                    }
+
+                    if (serverAnswer !== 0 || selectedAnswers[questionId] === undefined) {
+                        selectedAnswers[questionId] = serverAnswer;
+                    }
+                });
+            };
+
+            watch(() => props.all_questions, (records) => {
+                seedAnswersFromServer(records ?? []);
+            }, { immediate: true });
+
+            watch(() => props.question_active, (record) => {
+                const questionId = getQuestionKey(record?.question?.id ?? record?.question_id);
+                if (!questionId) {
+                    return;
+                }
+
+                if (selectedAnswers[questionId] === undefined && record?.answer) {
+                    selectedAnswers[questionId] = Number(record.answer);
+                }
+            });
+
             const finalizeAndRedirect = async (payload = null, icon = 'warning') => {
                 if (durationFinalized) {
                     return;
@@ -223,6 +394,8 @@
 
                 durationFinalized = true;
                 locked = true;
+
+                clearLocalState();
 
                 if (payload?.message) {
                     await Swal.fire({
@@ -258,13 +431,99 @@
                         duration.value = Math.min(duration.value, data.remaining);
                     }
 
+                    isOffline.value = false;
+                    saveLocalState();
+
                     return true;
                 } catch (error) {
-                    await finalizeAndRedirect(error?.response?.data);
+                    if (!error.response) {
+                        isOffline.value = true;
+                        saveLocalState();
+                        return true;
+                    }
+
+                    await finalizeAndRedirect(error.response.data, 'error');
                     return false;
                 } finally {
                     isPersistingDuration = false;
                 }
+            };
+
+            const flushPendingAnswers = async () => {
+                if (durationFinalized || isFlushing) {
+                    return;
+                }
+
+                const keys = Object.keys(pendingAnswers);
+                if (!keys.length) {
+                    return;
+                }
+
+                if (!gradeId) {
+                    return;
+                }
+
+                const payload = keys.map((key) => ({
+                    question_id: Number(key),
+                    answer: Number(pendingAnswers[key]),
+                }));
+
+                if (!payload.length) {
+                    return;
+                }
+
+                isFlushing = true;
+
+                try {
+                    const { data } = await axios.post('/student/exam-auto-save', {
+                        exam_id: examId,
+                        exam_session_id: examSessionId,
+                        grade_id: gradeId,
+                        answers: payload,
+                        device_token: deviceToken.value,
+                        device_info: deviceInfo,
+                    });
+
+                    if (Array.isArray(data?.synced_answers)) {
+                        data.synced_answers.forEach((questionId) => {
+                            const key = getQuestionKey(questionId);
+                            const sent = payload.find((entry) => entry.question_id === Number(questionId));
+                            if (sent && pendingAnswers[key] === sent.answer) {
+                                delete pendingAnswers[key];
+                            }
+                        });
+                    }
+
+                    isOffline.value = false;
+                    saveLocalState();
+                } catch (error) {
+                    if (!error.response) {
+                        isOffline.value = true;
+                        saveLocalState();
+                    } else if (error.response.status === 423) {
+                        await finalizeAndRedirect(error.response.data, 'error');
+                    }
+                } finally {
+                    isFlushing = false;
+                }
+            };
+
+            const selectAnswer = (questionId, answerValue) => {
+                if (durationFinalized) {
+                    return;
+                }
+
+                const key = getQuestionKey(questionId);
+                if (!key) {
+                    return;
+                }
+
+                const numeric = Number(answerValue);
+                selectedAnswers[key] = numeric;
+                pendingAnswers[key] = numeric;
+
+                saveLocalState();
+                flushPendingAnswers();
             };
 
             const handleChangeDuration = async () => {
@@ -274,6 +533,8 @@
 
                 duration.value = Math.max(0, duration.value - 1000);
                 counter.value = counter.value + 1;
+
+                 saveLocalState();
 
                 if (duration.value <= 0) {
                     await persistDuration();
@@ -295,6 +556,7 @@
                     return;
                 }
 
+                saveLocalState();
                 router.get(`/student/exam/${props.id}/${props.page - 1}`);
             };
 
@@ -308,6 +570,7 @@
                     return;
                 }
 
+                saveLocalState();
                 router.get(`/student/exam/${props.id}/${props.page + 1}`);
             };
 
@@ -321,29 +584,8 @@
                     return;
                 }
 
+                saveLocalState();
                 router.get(`/student/exam/${props.id}/${index + 1}`);
-            };
-
-            const submitAnswer = async (exam_id, question_id, answer) => {
-                if (durationFinalized) {
-                    return;
-                }
-
-                const ok = await persistDuration();
-                if (!ok) {
-                    return;
-                }
-
-                router.post('/student/exam-answer', {
-                    exam_id,
-                    exam_session_id: props.exam_group.exam_session.id,
-                    question_id,
-                    answer,
-                    device_token: deviceToken.value,
-                    device_info: deviceInfo,
-                }, {
-                    preserveScroll: true,
-                });
             };
 
             const endExam = async () => {
@@ -362,6 +604,10 @@
                     exam_session_id: props.exam_group.exam_session.id,
                     device_token: deviceToken.value,
                     device_info: deviceInfo,
+                }, {
+                    onSuccess: () => {
+                        clearLocalState();
+                    },
                 });
             };
 
@@ -526,10 +772,28 @@
                 handleDeviceChange();
             };
 
+            const handleOnline = () => {
+                isOffline.value = false;
+                flushPendingAnswers();
+                persistDuration();
+            };
+
+            const handleOffline = () => {
+                isOffline.value = true;
+                saveLocalState();
+            };
+
             onMounted(async () => {
                 if (typeof window === 'undefined') {
                     return;
                 }
+
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                    isOffline.value = true;
+                }
+
+                seedAnswersFromServer(props.all_questions ?? []);
+                loadLocalState();
 
                 document.addEventListener('visibilitychange', handleVisibility);
                 window.addEventListener('blur', handleBlur);
@@ -538,6 +802,9 @@
                 window.addEventListener('focus', checkDevtools);
                 document.addEventListener('contextmenu', handleContextMenu);
                 document.addEventListener('fullscreenchange', handleFullscreenChange);
+                window.addEventListener('online', handleOnline);
+                window.addEventListener('offline', handleOffline);
+                window.addEventListener('beforeunload', saveLocalState);
 
                 requestFullscreenIfAvailable();
                 checkDevtools();
@@ -545,6 +812,12 @@
 
                 setupScreenMonitoring();
                 await persistDuration();
+                await flushPendingAnswers();
+
+                autosaveInterval = window.setInterval(() => {
+                    flushPendingAnswers();
+                    saveLocalState();
+                }, 10000);
             });
 
             onBeforeUnmount(() => {
@@ -559,10 +832,18 @@
                 window.removeEventListener('focus', checkDevtools);
                 document.removeEventListener('contextmenu', handleContextMenu);
                 document.removeEventListener('fullscreenchange', handleFullscreenChange);
+                window.removeEventListener('online', handleOnline);
+                window.removeEventListener('offline', handleOffline);
+                window.removeEventListener('beforeunload', saveLocalState);
 
                 if (checkDevtoolsInterval) {
                     clearInterval(checkDevtoolsInterval);
                     checkDevtoolsInterval = null;
+                }
+
+                if (autosaveInterval) {
+                    clearInterval(autosaveInterval);
+                    autosaveInterval = null;
                 }
 
                 if (document.exitFullscreen && document.fullscreenElement) {
@@ -581,6 +862,8 @@
                         delete navigator.mediaDevices.__examPatched;
                     }
                 }
+
+                saveLocalState();
             });
 
             return {
@@ -590,10 +873,15 @@
                 prevPage,
                 nextPage,
                 clickQuestion,
-                submitAnswer,
+                selectAnswer,
                 showModalEndExam,
                 showModalEndTimeExam,
                 endExam,
+                totalQuestions,
+                answeredCount,
+                isOptionSelected,
+                isQuestionAnswered,
+                isOffline,
             };
         }
     }
