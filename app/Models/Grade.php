@@ -24,10 +24,15 @@ class Grade extends Model
         'last_cheat_at',
         'cheat_status',
         'cheat_reason',
+        'device_token',
+        'device_info',
+        'last_seen_at',
     ];
 
     protected $casts = [
         'last_cheat_at' => 'datetime',
+        'last_seen_at' => 'datetime',
+        'device_info' => 'array',
     ];
 
     /**

@@ -47,7 +47,6 @@
                                         <th class="border-0">Nama</th>
                                         <th class="border-0">Kelas</th>
                                         <th class="border-0">Jenis Kelamin</th>
-                                        <th class="border-0">Password</th>
                                         <th class="border-0 rounded-end" style="width:15%">Aksi</th>
                                     </tr>
                                 </thead>
@@ -60,7 +59,6 @@
                                         <td>{{ student.name }}</td>
                                         <td class="text-center">{{ student.classroom.title }}</td>
                                         <td class="text-center">{{ student.gender }}</td>
-                                        <td>{{ student.password }}</td>
                                         <td class="text-center">
                                             <Link :href="`/admin/students/${student.id}/edit`" class="btn btn-sm btn-info border-0 shadow me-2" type="button"><i class="fa fa-pencil-alt"></i></Link>
                                             <button @click.prevent="destroy(student.id)" class="btn btn-sm btn-danger border-0"><i class="fa fa-trash"></i></button>

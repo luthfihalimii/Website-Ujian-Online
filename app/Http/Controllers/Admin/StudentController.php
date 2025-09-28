@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Models\Student;
 use App\Models\Classroom;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use App\Imports\StudentsImport;
 use App\Http\Controllers\Controller;
 use Maatwebsite\Excel\Facades\Excel;
@@ -61,7 +62,7 @@ class StudentController extends Controller
             'name'          => 'required|string|max:255',
             'nisn'          => 'required|unique:students',
             'gender'        => 'required|string',
-            'password'      => 'required|confirmed',
+            'password'      => 'required|string|min:6|confirmed',
             'classroom_id'  => 'required'
         ]);
 
@@ -70,7 +71,7 @@ class StudentController extends Controller
             'name'          => $request->name,
             'nisn'          => $request->nisn,
             'gender'        => $request->gender,
-            'password'      => $request->password,
+            'password'      => Hash::make($request->password),
             'classroom_id'  => $request->classroom_id
         ]);
 
@@ -114,7 +115,7 @@ class StudentController extends Controller
             'nisn'          => 'required|unique:students,nisn,'.$student->id,
             'gender'        => 'required|string',
             'classroom_id'  => 'required',
-            'password'      => 'confirmed'
+            'password'      => 'nullable|string|min:6|confirmed'
         ]);
 
         //check passwordy
@@ -135,7 +136,7 @@ class StudentController extends Controller
                 'name'          => $request->name,
                 'nisn'          => $request->nisn,
                 'gender'        => $request->gender,
-                'password'      => $request->password,
+                'password'      => Hash::make($request->password),
                 'classroom_id'  => $request->classroom_id
             ]);
 

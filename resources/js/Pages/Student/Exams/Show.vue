@@ -130,42 +130,31 @@
 </template>
 
 <script>
-    //import layout student
     import LayoutStudent from '../../../Layouts/Student.vue';
 
-    //import Head and Link from Inertia
     import {
         Head,
         Link,
         router
     } from '@inertiajs/vue3';
 
-    //import ref
-    import {
-        ref
-    } from 'vue';
+    import { ref, onMounted, onBeforeUnmount } from 'vue';
 
-    //import VueCountdown
     import VueCountdown from '@chenfengyuan/vue-countdown';
 
-    //import axios
     import axios from 'axios';
 
-    //import sweet alert2
     import Swal from 'sweetalert2';
 
     export default {
-        //layout
         layout: LayoutStudent,
 
-        //register components
         components: {
             Head,
             Link,
             VueCountdown
         },
 
-        //props
         props: {
             id: Number,
             page: Number,
@@ -177,151 +166,233 @@
             duration: Object,
         },
 
-        //composition API
         setup(props) {
+            const options = ["A", "B", "C", "D", "E"];
 
-            //define options for answer
-            let options = ["A", "B", "C", "D", "E"];
-
-            //define state counter
             const counter = ref(0);
+            const duration = ref(props.duration?.duration ?? 0);
 
-            //define state duration
-            const duration = ref(props.duration.duration);
+            const showModalEndExam = ref(false);
+            const showModalEndTimeExam = ref(false);
 
-            //handleChangeDuration
-            const handleChangeDuration = (() => {
+            let locked = false;
+            let durationFinalized = false;
+            let checkDevtoolsInterval = null;
+            let isPersistingDuration = false;
+            let deviceChangeListener = null;
+            let originalGetDisplayMedia = null;
 
-                //decrement duration
-                duration.value = duration.value - 1000;
+            const deviceTokenKey = `exam_device_token_${props.exam_group?.id ?? 'unknown'}`;
+            let initialToken = null;
 
-                //increment counter
-                counter.value = counter.value + 1;
+            if (typeof window !== 'undefined') {
+                try {
+                    initialToken = window.localStorage.getItem(deviceTokenKey);
+                } catch (_) {
+                    initialToken = null;
+                }
+            }
 
-                //cek jika durasi di atas 0
-                if (duration.value > 0) {
+            if (!initialToken && typeof window !== 'undefined') {
+                const generated = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                initialToken = generated;
+                try {
+                    window.localStorage.setItem(deviceTokenKey, generated);
+                } catch (_) {
+                    // ignore storage issues
+                }
+            }
 
-                    //update duration if 10 seconds
-                    if (counter.value % 10 == 1) {
+            const deviceToken = ref(initialToken || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-                        //update duration
-                        axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                            duration: duration.value
-                        })
+            const deviceInfo = typeof window !== 'undefined' ? {
+                user_agent: window.navigator.userAgent,
+                platform: window.navigator.platform,
+                language: window.navigator.language,
+                screen: `${window.screen.width}x${window.screen.height}`,
+                color_depth: window.screen.colorDepth,
+                hardware_concurrency: window.navigator.hardwareConcurrency,
+                device_memory: window.navigator.deviceMemory,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            } : {};
 
-                    }
-
+            const finalizeAndRedirect = async (payload = null, icon = 'warning') => {
+                if (durationFinalized) {
+                    return;
                 }
 
-            });
+                durationFinalized = true;
+                locked = true;
 
-            //metohd prevPage
-            const prevPage = (() => {
+                if (payload?.message) {
+                    await Swal.fire({
+                        title: icon === 'error' ? 'Ujian Dihentikan' : 'Sesi Berakhir',
+                        text: payload.message,
+                        icon,
+                        confirmButtonText: 'OK',
+                    });
+                }
 
-                //update duration
-                axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                    duration: duration.value
-                });
+                if (payload?.redirect_to) {
+                    window.location.href = payload.redirect_to;
+                } else {
+                    router.get('/student/dashboard');
+                }
+            };
 
-                //redirect to prevPage
+            const persistDuration = async () => {
+                if (!props.duration?.id || durationFinalized || isPersistingDuration) {
+                    return !durationFinalized;
+                }
+
+                isPersistingDuration = true;
+
+                try {
+                    const { data } = await axios.put(`/student/exam-duration/update/${props.duration.id}`, {
+                        duration: duration.value,
+                        device_token: deviceToken.value,
+                        device_info: deviceInfo,
+                    });
+
+                    if (typeof data?.remaining === 'number') {
+                        duration.value = Math.min(duration.value, data.remaining);
+                    }
+
+                    return true;
+                } catch (error) {
+                    await finalizeAndRedirect(error?.response?.data);
+                    return false;
+                } finally {
+                    isPersistingDuration = false;
+                }
+            };
+
+            const handleChangeDuration = async () => {
+                if (durationFinalized) {
+                    return;
+                }
+
+                duration.value = Math.max(0, duration.value - 1000);
+                counter.value = counter.value + 1;
+
+                if (duration.value <= 0) {
+                    await persistDuration();
+                    return;
+                }
+
+                if (counter.value % 10 === 1) {
+                    await persistDuration();
+                }
+            };
+
+            const prevPage = async () => {
+                if (durationFinalized || props.page <= 1) {
+                    return;
+                }
+
+                const ok = await persistDuration();
+                if (!ok) {
+                    return;
+                }
+
                 router.get(`/student/exam/${props.id}/${props.page - 1}`);
+            };
 
-            });
+            const nextPage = async () => {
+                if (durationFinalized) {
+                    return;
+                }
 
-            //method nextPage
-            const nextPage = (() => {
+                const ok = await persistDuration();
+                if (!ok) {
+                    return;
+                }
 
-                //update duration
-                axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                    duration: duration.value
-                });
-
-                //redirect to nextPage
                 router.get(`/student/exam/${props.id}/${props.page + 1}`);
-            });
+            };
 
-            //method clickQuestion
-            const clickQuestion = ((index) => {
+            const clickQuestion = async (index) => {
+                if (durationFinalized) {
+                    return;
+                }
 
-                //update duration
-                axios.put(`/student/exam-duration/update/${props.duration.id}`, {
-                    duration: duration.value
-                });
+                const ok = await persistDuration();
+                if (!ok) {
+                    return;
+                }
 
-                //redirect to questin
                 router.get(`/student/exam/${props.id}/${index + 1}`);
-            });
+            };
 
-            //method submit answer
-            const submitAnswer = ((exam_id, question_id, answer) => {
+            const submitAnswer = async (exam_id, question_id, answer) => {
+                if (durationFinalized) {
+                    return;
+                }
+
+                const ok = await persistDuration();
+                if (!ok) {
+                    return;
+                }
 
                 router.post('/student/exam-answer', {
-                    exam_id: exam_id,
+                    exam_id,
                     exam_session_id: props.exam_group.exam_session.id,
-                    question_id: question_id,
-                    answer: answer,
-                    duration: duration.value
+                    question_id,
+                    answer,
+                    device_token: deviceToken.value,
+                    device_info: deviceInfo,
+                }, {
+                    preserveScroll: true,
                 });
+            };
 
-            });
+            const endExam = async () => {
+                if (durationFinalized) {
+                    return;
+                }
 
-            //define state modal
-            const showModalEndExam      = ref(false);
-            const showModalEndTimeExam  = ref(false);
-
-            //method endExam
-            const endExam = (() => {
+                const ok = await persistDuration();
+                if (!ok) {
+                    return;
+                }
 
                 router.post('/student/exam-end', {
                     exam_group_id: props.exam_group.id,
                     exam_id: props.exam_group.exam.id,
                     exam_session_id: props.exam_group.exam_session.id,
+                    device_token: deviceToken.value,
+                    device_info: deviceInfo,
                 });
+            };
 
-                //show success alert
-                Swal.fire({
-                    title: 'Success!',
-                    text: 'Ujian Selesai!.',
-                    icon: 'success',
-                    showConfirmButton: false,
-                    timer: 4000
-                });
-
-            });
-
-            // Anti-cheat logic
-            const cheatingThreshold = 3; // show warnings up to 3, then lock
+            const cheatingThreshold = 3;
             let localCheatCount = 0;
-            let locked = false;
 
             const reportCheat = async (type, meta = {}) => {
-                if (locked) return;
+                if (locked || durationFinalized) {
+                    return;
+                }
+
                 try {
                     const { data } = await axios.post('/student/exam-anti-cheat', {
                         exam_id: props.exam_group.exam.id,
                         exam_session_id: props.exam_group.exam_session.id,
                         grade_id: props.duration.id,
                         type,
-                        meta,
+                        meta: {
+                            device_token: deviceToken.value,
+                            device_info: deviceInfo,
+                            ...meta,
+                        },
                     });
 
                     if (data.success) {
                         if (data.locked) {
-                            locked = true;
-                            await Swal.fire({
-                                title: 'Akun Dikunci',
-                                text: data.message || 'Anda telah melakukan kecurangan berulang. Ujian diakhiri dengan nilai 0.',
-                                icon: 'error',
-                                confirmButtonText: 'OK'
-                            });
-                            if (data.redirect_to) {
-                                window.location.href = data.redirect_to;
-                            } else {
-                                router.get('/student/dashboard');
-                            }
+                            await finalizeAndRedirect(data, 'error');
                         } else {
                             localCheatCount = data.cheat_count ?? (localCheatCount + 1);
                             const remaining = data.remaining ?? Math.max(0, cheatingThreshold - localCheatCount);
+
                             Swal.fire({
                                 title: 'Peringatan!',
                                 text: `Terdeteksi kecurangan (${localCheatCount}). Kesempatan tersisa: ${remaining}.`,
@@ -331,8 +402,8 @@
                             });
                         }
                     }
-                } catch (e) {
-                    // ignore
+                } catch (error) {
+                    await finalizeAndRedirect(error?.response?.data);
                 }
             };
 
@@ -343,33 +414,43 @@
             };
 
             const handleBlur = () => {
-                // window lost focus (likely switched tab)
                 reportCheat('WINDOW_BLUR');
             };
 
-            const handleContextMenu = (e) => {
-                e.preventDefault();
+            const handleContextMenu = (event) => {
+                event.preventDefault();
                 reportCheat('CONTEXT_MENU');
             };
 
-            const handleKeydown = (e) => {
-                if ((e.ctrlKey || e.metaKey) && ['c', 'x', 'v', 'a'].includes(e.key.toLowerCase())) {
-                    e.preventDefault();
-                    reportCheat('KEYBOARD_SHORTCUT', { key: e.key });
+            const handleKeydown = (event) => {
+                const loweredKey = event.key.toLowerCase();
+
+                if ((event.ctrlKey || event.metaKey) && ['c', 'x', 'v', 'a'].includes(loweredKey)) {
+                    event.preventDefault();
+                    reportCheat('KEYBOARD_SHORTCUT', { key: event.key });
                 }
-                // F12 or Ctrl+Shift+I => DevTools
-                if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i')) {
-                    e.preventDefault();
+
+                if (event.key === 'PrintScreen') {
+                    event.preventDefault();
+                    reportCheat('PRINTSCREEN_KEY');
+                }
+
+                if (event.key === 'F12' || (event.ctrlKey && event.shiftKey && loweredKey === 'i')) {
+                    event.preventDefault();
                     reportCheat('DEVTOOLS_SHORTCUT');
                 }
             };
 
-            // naive devtools detection
             let devtoolsOpen = false;
             const checkDevtools = () => {
+                if (typeof window === 'undefined' || durationFinalized) {
+                    return;
+                }
+
                 const widthThreshold = window.outerWidth - window.innerWidth > 160;
                 const heightThreshold = window.outerHeight - window.innerHeight > 160;
                 const opened = widthThreshold || heightThreshold;
+
                 if (opened && !devtoolsOpen) {
                     devtoolsOpen = true;
                     reportCheat('DEVTOOLS_DETECTED');
@@ -378,25 +459,78 @@
                 }
             };
 
-            // full screen guard: force fullscreen, report exit
             const requestFullscreenIfAvailable = async () => {
+                if (durationFinalized) {
+                    return;
+                }
+
                 const el = document.documentElement;
-                if (el.requestFullscreen) {
+                if (el.requestFullscreen && !document.fullscreenElement) {
                     try {
                         await el.requestFullscreen();
-                    } catch (_) {}
+                    } catch (_) {
+                        // ignore failure
+                    }
                 }
             };
 
             const handleFullscreenChange = () => {
-                const inFs = !!(document.fullscreenElement);
-                if (!inFs) {
+                const inFullscreen = Boolean(document.fullscreenElement);
+                if (!inFullscreen) {
                     reportCheat('FULLSCREEN_EXIT');
+                    requestFullscreenIfAvailable();
                 }
             };
 
-            // attach listeners on mount
-            if (typeof window !== 'undefined') {
+            const handleDeviceChange = async () => {
+                if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
+                    return;
+                }
+
+                try {
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const suspicious = devices
+                        .filter((device) => device.kind === 'videoinput' && /screen|display|record|virtual/i.test(device.label || ''))
+                        .map((device) => ({ id: device.deviceId, label: device.label }));
+
+                    if (suspicious.length > 0) {
+                        reportCheat('SCREEN_RECORDING_DEVICE', { devices: suspicious });
+                    }
+                } catch (_) {
+                    // ignore enumeration errors
+                }
+            };
+
+            const setupScreenMonitoring = () => {
+                if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
+                    return;
+                }
+
+                if (navigator.mediaDevices.getDisplayMedia && !navigator.mediaDevices.__examPatched) {
+                    originalGetDisplayMedia = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+                    navigator.mediaDevices.getDisplayMedia = async (...args) => {
+                        reportCheat('SCREEN_RECORDING_REQUEST');
+                        return originalGetDisplayMedia(...args);
+                    };
+                    navigator.mediaDevices.__examPatched = true;
+                }
+
+                deviceChangeListener = handleDeviceChange;
+
+                if (navigator.mediaDevices.addEventListener) {
+                    navigator.mediaDevices.addEventListener('devicechange', deviceChangeListener);
+                } else {
+                    navigator.mediaDevices.ondevicechange = deviceChangeListener;
+                }
+
+                handleDeviceChange();
+            };
+
+            onMounted(async () => {
+                if (typeof window === 'undefined') {
+                    return;
+                }
+
                 document.addEventListener('visibilitychange', handleVisibility);
                 window.addEventListener('blur', handleBlur);
                 window.addEventListener('keydown', handleKeydown);
@@ -404,13 +538,51 @@
                 window.addEventListener('focus', checkDevtools);
                 document.addEventListener('contextmenu', handleContextMenu);
                 document.addEventListener('fullscreenchange', handleFullscreenChange);
-                // try fullscreen
-                requestFullscreenIfAvailable();
-                // initial check
-                setInterval(checkDevtools, 1500);
-            }
 
-            //return
+                requestFullscreenIfAvailable();
+                checkDevtools();
+                checkDevtoolsInterval = window.setInterval(checkDevtools, 1500);
+
+                setupScreenMonitoring();
+                await persistDuration();
+            });
+
+            onBeforeUnmount(() => {
+                if (typeof window === 'undefined') {
+                    return;
+                }
+
+                document.removeEventListener('visibilitychange', handleVisibility);
+                window.removeEventListener('blur', handleBlur);
+                window.removeEventListener('keydown', handleKeydown);
+                window.removeEventListener('resize', checkDevtools);
+                window.removeEventListener('focus', checkDevtools);
+                document.removeEventListener('contextmenu', handleContextMenu);
+                document.removeEventListener('fullscreenchange', handleFullscreenChange);
+
+                if (checkDevtoolsInterval) {
+                    clearInterval(checkDevtoolsInterval);
+                    checkDevtoolsInterval = null;
+                }
+
+                if (document.exitFullscreen && document.fullscreenElement) {
+                    document.exitFullscreen().catch(() => {});
+                }
+
+                if (navigator.mediaDevices) {
+                    if (navigator.mediaDevices.addEventListener && deviceChangeListener) {
+                        navigator.mediaDevices.removeEventListener('devicechange', deviceChangeListener);
+                    } else if (navigator.mediaDevices.ondevicechange === deviceChangeListener) {
+                        navigator.mediaDevices.ondevicechange = null;
+                    }
+
+                    if (navigator.mediaDevices.__examPatched && originalGetDisplayMedia) {
+                        navigator.mediaDevices.getDisplayMedia = originalGetDisplayMedia;
+                        delete navigator.mediaDevices.__examPatched;
+                    }
+                }
+            });
+
             return {
                 options,
                 duration,
@@ -422,8 +594,7 @@
                 showModalEndExam,
                 showModalEndTimeExam,
                 endExam,
-            }
-
+            };
         }
     }
 

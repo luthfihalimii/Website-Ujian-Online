@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Student;
 
 use App\Models\Student;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use App\Http\Controllers\Controller;
 
 class LoginController extends Controller
@@ -23,12 +24,9 @@ class LoginController extends Controller
         ]);
 
         //cek nisn dan password
-        $student = Student::where([
-            'nisn'      => $request->nisn,
-            'password'  => $request->password
-        ])->first();
+        $student = Student::where('nisn', $request->nisn)->first();
 
-        if(!$student) {
+        if(!$student || !Hash::check($request->password, $student->password)) {
             return redirect()->back()->with('error', 'NISN atau Password salah');
         }
         if ($student->is_locked ?? false) {
