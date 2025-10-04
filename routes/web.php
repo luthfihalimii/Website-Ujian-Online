@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Inertia\Inertia;
 
 //prefix "admin"
 Route::prefix('admin')->group(function() {
@@ -132,4 +133,24 @@ Route::prefix('student')->group(function() {
         Route::get('/time-sync', App\Http\Controllers\Student\TimeSyncController::class)->name('student.time-sync');
     });
 
+});
+
+Route::fallback(function () {
+    $request = request();
+
+    $homeUrl = url('/');
+    if (Route::has('student.dashboard') && auth()->guard('student')->check()) {
+        $homeUrl = route('student.dashboard', [], false);
+    }
+
+    $adminUrl = null;
+    if (Route::has('admin.dashboard')) {
+        $adminUrl = route('admin.dashboard', [], false);
+    }
+
+    return Inertia::render('Errors/NotFound', [
+        'status' => 404,
+        'homeUrl' => $homeUrl,
+        'adminUrl' => $adminUrl,
+    ])->toResponse($request)->setStatusCode(404);
 });
