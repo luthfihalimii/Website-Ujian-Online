@@ -1,79 +1,92 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Ujian Online
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Platform ujian berbasis web untuk mengelola ujian berbasis komputer dengan fitur pemantauan kecurangan, dibangun menggunakan Laravel 12, Inertia.js, dan Vue 3. Dokumentasi ini merangkum alur kerja, kebutuhan lingkungan, serta cara menjalankan proyek secara lokal maupun produksi.
 
-## About Laravel
+## Daftar Isi
+- [Fitur Utama](#fitur-utama)
+- [Teknologi](#teknologi)
+- [Kebutuhan Sistem](#kebutuhan-sistem)
+- [Instalasi Cepat](#instalasi-cepat)
+- [Konfigurasi Lingkungan](#konfigurasi-lingkungan)
+- [Menjalankan Aplikasi](#menjalankan-aplikasi)
+- [Akun Bawaan](#akun-bawaan)
+- [Alur Penggunaan](#alur-penggunaan)
+- [Fitur Anti Cheat](#fitur-anti-cheat)
+- [Testing](#testing)
+- [Tips Deployment](#tips-deployment)
+- [Lisensi](#lisensi)
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Fitur Utama
+- **Manajemen konten ujian**: CRUD mata pelajaran, kelas, bank soal, sesi ujian, serta import soal dan peserta melalui Excel.
+- **Pengawasan realtime**: Monitoring sesi ujian, status pengerjaan siswa, serta rekap nilai dan export hasil ke Excel.
+- **Portal siswa**: SSO siswa dengan guard tersendiri, countdown durasi ujian, autosave jawaban, navigasi soal, dan rekap nilai akhir.
+- **Anti cheat terintegrasi**: Deteksi fokus layar, penggunaan shortcut mencurigakan, devtools, dan pelanggaran lain yang tercatat ke tabel `cheat_events`.
+- **Penanganan pelanggaran**: Peringatan otomatis hingga 3 kali, penguncian akun siswa, dan panel admin untuk membuka kunci akun.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Teknologi
+- PHP 8.2+, Laravel 12, Laravel Octane, Fortify untuk autentikasi admin.
+- Inertia.js, Vue 3, Tailwind CSS 4, Axios, dan Vite untuk frontend.
+- Database relasional (MySQL, PostgreSQL, atau SQLite) dengan migrasi Laravel.
+- Maatwebsite Excel untuk import/export data.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Kebutuhan Sistem
+- PHP 8.2 atau lebih baru beserta ekstensi standar Laravel (`fileinfo`, `json`, `mbstring`, `openssl`, `pdo`, `tokenizer`, dll).
+- Composer 2.6+.
+- Node.js 18+ dan npm, atau Bun sebagai alternatif.
+- Server database (MySQL/MariaDB, PostgreSQL, atau SQLite untuk pengembangan cepat).
+- Redis (opsional) bila ingin memanfaatkan queue/broadcast selain driver default.
 
-## Anti-Cheat (Fitur Anti Kecurangan)
+## Instalasi Cepat
+1. Clone repository dan masuk ke folder proyek.
+2. Instal dependensi backend: `composer install`.
+3. Instal dependensi frontend: `npm install` (atau `bun install`).
+4. Salin `.env.example` menjadi `.env` dan sesuaikan variabel lingkungan.
+5. Generate application key: `php artisan key:generate`.
+6. Atur kredensial database pada `.env` dan buat database-nya.
+7. Jalankan migrasi dan seeding dasar: `php artisan migrate --seed`.
+8. Link storage bila diperlukan untuk file upload: `php artisan storage:link`.
 
-Repo ini telah ditambahkan fitur anti-cheat untuk ujian siswa:
+## Konfigurasi Lingkungan
+- **APP_URL**: arahkan ke domain atau base URL aplikasi (misal `http://localhost:8000`).
+- **Database**: gunakan `DB_CONNECTION=mysql` (atau driver lain) dan lengkapi host, port, nama basis data, user, serta password.
+- **Queue & Cache**: konfigurasi default menggunakan database driver dan aman untuk produksi kecil. Sesuaikan ke Redis bila volume tinggi.
+- **Mail**: ubah `MAIL_MAILER` ke driver pilihan (SMTP, Mailgun, dll) untuk notifikasi email.
+- **Guard siswa**: sesi siswa disimpan di driver database (`SESSION_DRIVER=database`). Jalankan `php artisan session:table` bila driver diubah.
 
-- Deteksi perpindahan tab/jendela, menyembunyikan tab, klik kanan, shortcut keyboard (Ctrl+C/V/A/X), membuka devtools, keluar dari fullscreen.
-- Setiap pelanggaran akan dicatat sebagai Cheat Event (tabel `cheat_events`).
-- Siswa mendapat peringatan sampai 3x. Lebih dari itu akun siswa otomatis terkunci dan ujian diakhiri dengan nilai 0.
-- Admin dapat memantau pada menu Admin → Monitoring Kecurangan dan membuka kunci akun siswa.
+## Menjalankan Aplikasi
+- Jalankan web server lokal: `php artisan serve` (atau `php artisan octane:start` untuk performa lebih tinggi).
+- Jalankan asset bundler: `npm run dev` untuk hot reload atau `npm run build` untuk produksi.
+- Opsi all-in-one: `composer dev` akan menjalankan server Laravel, queue listener, log streaming, dan Vite secara bersamaan.
 
-Langkah aktivasi:
+## Akun Bawaan
+Seeder menyediakan akun admin awal:
+- Email: `admin@gmail.com` & Kata sandi: `password`
+- Email: `superadmin@example.com` & Kata sandi: `supersecret`
 
-1. Jalankan migrasi database agar kolom dan tabel baru tersedia.
-2. Build asset frontend (Vite) bila perlu.
+Tambahkan data siswa melalui menu Admin `Siswa` atau impor dengan template Excel.
 
-Cara membuka kunci akun:
+## Alur Penggunaan
+1. **Admin** membuat mata pelajaran, kelas, bank soal, dan menyusun ujian melalui panel admin (`/admin`).
+2. Admin menjadwalkan sesi ujian, menambahkan kelompok peserta, dan memantau progres melalui dashboard.
+3. Siswa login via halaman utama, melakukan konfirmasi ujian, mengerjakan soal, dan mengirim jawaban.
+4. Sistem menyimpan jawaban secara otomatis, menghitung nilai, dan menampilkan rekap hasil kepada siswa serta admin.
 
-- Buka Admin → Monitoring Kecurangan, pada bagian Akun Terkunci klik “Buka Kunci”.
+## Fitur Anti Cheat
+- Deteksi kejadian: pergantian tab/jendela, keluar fullscreen, membuka developer tools, klik kanan, shortcut copy/paste/cut/select all.
+- Setiap kejadian dicatat dengan timestamp dan alamat IP ke tabel `cheat_events` dan muncul pada menu Admin `Monitoring Kecurangan`.
+- Setelah 3 pelanggaran, akun siswa terkunci dan ujian otomatis berakhir dengan skor 0.
+- Admin dapat membuka kembali akun siswa melalui tombol `Buka Kunci` pada panel monitoring.
 
-## Learning Laravel
+## Testing
+- Jalankan test suite backend: `composer test`.
+- Gunakan `php artisan test --filter` untuk menjalankan test tertentu.
+- Tambahkan test baru pada direktori `tests/` guna menjaga stabilitas fitur inti.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+## Tips Deployment
+- Bangun asset produksi: `npm run build`.
+- Jalankan migrasi dan seeding yang diperlukan di server: `php artisan migrate --force`.
+- Cache konfigurasi dan route: `php artisan config:cache` dan `php artisan route:cache`.
+- Konfigurasikan supervisor/PM2 untuk queue listener dan proses Octane bila digunakan.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
-
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-## Laravel Sponsors
-
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
-
-### Premium Partners
-
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
-
-## Contributing
-
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
-
-## Code of Conduct
-
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## Lisensi
+Proyek ini berada di bawah lisensi [MIT](https://opensource.org/licenses/MIT).
