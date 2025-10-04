@@ -204,6 +204,12 @@
             let originalGetDisplayMedia = null;
             let isFlushing = false;
             let autosaveInterval = null;
+            let serverSyncInterval = null;
+            let canvasMonitorInterval = null;
+            let screenFingerprintBaseline = null;
+            let lastServerTick = null;
+            let lastScreenshotEvent = 0;
+            let lastServerRollbackReport = 0;
 
             const examId = props.exam_group.exam.id;
             const examSessionId = props.exam_group.exam_session.id;
@@ -214,6 +220,7 @@
             const pendingAnswers = reactive({});
 
             const isOffline = ref(false);
+            const serverTimeOffset = ref(0);
 
             const deviceTokenKey = `exam_device_token_${props.exam_group?.id ?? 'unknown'}`;
             let initialToken = null;
@@ -248,6 +255,71 @@
                 device_memory: window.navigator.deviceMemory,
                 timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             } : {};
+
+            const getServerNow = () => Date.now() + serverTimeOffset.value;
+
+            const computeScreenFingerprint = () => {
+                if (typeof document === 'undefined') {
+                    return null;
+                }
+
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 220;
+                    canvas.height = 60;
+                    const ctx = canvas.getContext('2d');
+
+                    if (!ctx) {
+                        return null;
+                    }
+
+                    const metrics = [
+                        window.screen.width,
+                        window.screen.height,
+                        window.screen.availWidth,
+                        window.screen.availHeight,
+                        window.devicePixelRatio,
+                        window.outerWidth,
+                        window.outerHeight,
+                        window.visualViewport?.scale ?? 1,
+                    ].join('|');
+
+                    ctx.fillStyle = '#0f172a';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.font = '14px monospace';
+                    ctx.fillText(metrics, 6, 24);
+                    ctx.strokeStyle = '#f97316';
+                    ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+
+                    return canvas.toDataURL();
+                } catch (error) {
+                    return null;
+                }
+            };
+
+            const monitorCanvasFingerprint = () => {
+                if (durationFinalized) {
+                    return;
+                }
+
+                const fingerprint = computeScreenFingerprint();
+                if (!fingerprint) {
+                    return;
+                }
+
+                if (!screenFingerprintBaseline) {
+                    screenFingerprintBaseline = fingerprint;
+                    return;
+                }
+
+                if (fingerprint !== screenFingerprintBaseline) {
+                    screenFingerprintBaseline = fingerprint;
+                    reportCheat('SCREEN_FINGERPRINT_CHANGE', {
+                        fingerprint,
+                    });
+                }
+            };
 
             const totalQuestions = computed(() => props.all_questions.length);
             const answeredCount = computed(() => Object.keys(selectedAnswers).filter((key) => Number(selectedAnswers[key] ?? 0) !== 0).length);
@@ -559,19 +631,51 @@
                 flushPendingAnswers();
             };
 
-            const handleChangeDuration = async () => {
+            const handleChangeDuration = async (payload) => {
                 if (durationFinalized) {
                     return;
                 }
 
-                duration.value = Math.max(0, duration.value - 1000);
+                const serverNow = getServerNow();
+                if (lastServerTick === null) {
+                    lastServerTick = serverNow;
+                }
+
+                let delta = serverNow - lastServerTick;
+                if (!Number.isFinite(delta) || delta <= 0) {
+                    const clientNow = Date.now();
+                    if (clientNow - lastServerRollbackReport > 10000) {
+                        reportCheat('SERVER_TIME_ROLLBACK', {
+                            delta,
+                            client_timestamp: clientNow,
+                        });
+                        lastServerRollbackReport = clientNow;
+                    }
+                    delta = 1000;
+                }
+
+                delta = Math.min(delta, 5000);
+
+                const countdownMs = Number(payload?.totalMilliseconds);
+                let nextDuration = duration.value - delta;
+
+                if (Number.isFinite(countdownMs)) {
+                    nextDuration = Math.min(nextDuration, countdownMs);
+                }
+
+                duration.value = Math.max(0, nextDuration);
                 counter.value = counter.value + 1;
+                lastServerTick = serverNow;
 
                  saveLocalState();
 
                 if (duration.value <= 0) {
                     await persistDuration();
                     return;
+                }
+
+                if (counter.value % 30 === 0) {
+                    await syncServerTime(true);
                 }
 
                 if (counter.value % 10 === 1) {
@@ -645,6 +749,7 @@
             };
 
             const cheatingThreshold = 3;
+            const serverDriftThreshold = 3000;
             let localCheatCount = 0;
 
             const reportCheat = async (type, meta = {}) => {
@@ -686,6 +791,39 @@
                 }
             };
 
+            const syncServerTime = async (report = false) => {
+                try {
+                    const { data } = await axios.get('/student/time-sync', {
+                        headers: {
+                            'Cache-Control': 'no-cache',
+                        },
+                    });
+
+                    const timestamp = Number(data?.timestamp);
+                    if (!Number.isFinite(timestamp)) {
+                        return;
+                    }
+
+                    const now = Date.now();
+                    const newOffset = timestamp - now;
+                    const diff = Math.abs(newOffset - serverTimeOffset.value);
+
+                    if (report && serverTimeOffset.value !== 0 && diff > serverDriftThreshold) {
+                        reportCheat('SERVER_TIME_DRIFT', {
+                            diff,
+                            server_timestamp: timestamp,
+                        });
+                    }
+
+                    serverTimeOffset.value = newOffset;
+                    lastServerTick = timestamp;
+                } catch (error) {
+                    if (report && error?.response?.status === 401) {
+                        await finalizeAndRedirect(error.response.data, 'error');
+                    }
+                }
+            };
+
             const handleVisibility = () => {
                 if (document.hidden) {
                     reportCheat('VISIBILITY_HIDDEN');
@@ -709,14 +847,47 @@
                     reportCheat('KEYBOARD_SHORTCUT', { key: event.key });
                 }
 
+                if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['3', '4', '5', 's'].includes(loweredKey)) {
+                    event.preventDefault();
+                    if (Date.now() - lastScreenshotEvent > 1000) {
+                        reportCheat('SCREENSHOT_SHORTCUT', { combo: `${event.metaKey ? 'Meta' : 'Ctrl'}+Shift+${event.key}` });
+                        lastScreenshotEvent = Date.now();
+                    }
+                }
+
+                if (event.metaKey && ['3', '4'].includes(loweredKey) && !event.shiftKey) {
+                    event.preventDefault();
+                    if (Date.now() - lastScreenshotEvent > 1000) {
+                        reportCheat('SCREENSHOT_SHORTCUT', { combo: `Meta+${event.key}` });
+                        lastScreenshotEvent = Date.now();
+                    }
+                }
+
                 if (event.key === 'PrintScreen') {
                     event.preventDefault();
                     reportCheat('PRINTSCREEN_KEY');
+                    lastScreenshotEvent = Date.now();
                 }
 
                 if (event.key === 'F12' || (event.ctrlKey && event.shiftKey && loweredKey === 'i')) {
                     event.preventDefault();
                     reportCheat('DEVTOOLS_SHORTCUT');
+                }
+            };
+
+            const handleKeyup = (event) => {
+                const loweredKey = event.key.toLowerCase();
+
+                if (event.key === 'PrintScreen' && Date.now() - lastScreenshotEvent > 800) {
+                    reportCheat('PRINTSCREEN_KEY');
+                    lastScreenshotEvent = Date.now();
+                }
+
+                if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['3', '4', '5', 's'].includes(loweredKey)) {
+                    if (Date.now() - lastScreenshotEvent > 800) {
+                        reportCheat('SCREENSHOT_SHORTCUT', { combo: `${event.metaKey ? 'Meta' : 'Ctrl'}+Shift+${event.key}` });
+                        lastScreenshotEvent = Date.now();
+                    }
                 }
             };
 
@@ -809,6 +980,7 @@
                 isOffline.value = false;
                 flushPendingAnswers();
                 persistDuration();
+                syncServerTime();
             };
 
             const handleOffline = () => {
@@ -831,6 +1003,7 @@
                 document.addEventListener('visibilitychange', handleVisibility);
                 window.addEventListener('blur', handleBlur);
                 window.addEventListener('keydown', handleKeydown);
+                window.addEventListener('keyup', handleKeyup);
                 window.addEventListener('resize', checkDevtools);
                 window.addEventListener('focus', checkDevtools);
                 document.addEventListener('contextmenu', handleContextMenu);
@@ -844,6 +1017,13 @@
                 checkDevtoolsInterval = window.setInterval(checkDevtools, 1500);
 
                 setupScreenMonitoring();
+                await syncServerTime();
+                lastServerTick = getServerNow();
+                serverSyncInterval = window.setInterval(() => {
+                    syncServerTime(true);
+                }, 60000);
+                monitorCanvasFingerprint();
+                canvasMonitorInterval = window.setInterval(monitorCanvasFingerprint, 7000);
                 await persistDuration();
                 await flushPendingAnswers();
 
@@ -861,6 +1041,7 @@
                 document.removeEventListener('visibilitychange', handleVisibility);
                 window.removeEventListener('blur', handleBlur);
                 window.removeEventListener('keydown', handleKeydown);
+                window.removeEventListener('keyup', handleKeyup);
                 window.removeEventListener('resize', checkDevtools);
                 window.removeEventListener('focus', checkDevtools);
                 document.removeEventListener('contextmenu', handleContextMenu);
@@ -877,6 +1058,16 @@
                 if (autosaveInterval) {
                     clearInterval(autosaveInterval);
                     autosaveInterval = null;
+                }
+
+                if (serverSyncInterval) {
+                    clearInterval(serverSyncInterval);
+                    serverSyncInterval = null;
+                }
+
+                if (canvasMonitorInterval) {
+                    clearInterval(canvasMonitorInterval);
+                    canvasMonitorInterval = null;
                 }
 
                 if (document.exitFullscreen && document.fullscreenElement) {

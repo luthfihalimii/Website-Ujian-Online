@@ -127,6 +127,9 @@ Route::prefix('student')->group(function() {
 
         // anti-cheat reporting endpoint
         Route::post('/exam-anti-cheat', [App\Http\Controllers\Student\AntiCheatController::class, 'report'])->name('student.exams.antiCheat');
+
+        // server time sync endpoint
+        Route::get('/time-sync', App\Http\Controllers\Student\TimeSyncController::class)->name('student.time-sync');
     });
 
 });

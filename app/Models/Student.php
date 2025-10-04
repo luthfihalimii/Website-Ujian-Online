@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -80,5 +79,13 @@ class Student extends Authenticatable
     public function cheatEvents()
     {
         return $this->hasMany(CheatEvent::class);
+    }
+
+    /**
+     * Active login sessions for the student.
+     */
+    public function loginSessions()
+    {
+        return $this->hasMany(StudentLoginSession::class);
     }
 }

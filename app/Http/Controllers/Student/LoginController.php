@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Student;
 use App\Models\Student;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use App\Services\StudentDeviceManager;
 use App\Http\Controllers\Controller;
 
 class LoginController extends Controller
@@ -15,7 +16,7 @@ class LoginController extends Controller
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\Response
      */
-    public function __invoke(Request $request)
+    public function __invoke(Request $request, StudentDeviceManager $deviceManager)
     {
         //validate the form data
         $request->validate([
@@ -33,8 +34,12 @@ class LoginController extends Controller
             return redirect()->back()->with('error', 'Akun Anda terkunci. Hubungi admin untuk membuka kunci.');
         }
 
-        //login the user
+        //login the user and regenerate session id
         auth()->guard('student')->login($student);
+        $request->session()->regenerate();
+
+        // register active session & invalidate others
+        $deviceManager->registerLogin($student, $request);
 
         //redirect to dashboard
         return redirect()->route('student.dashboard');

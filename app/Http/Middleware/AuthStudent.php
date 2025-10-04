@@ -2,11 +2,16 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\StudentDeviceManager;
 use Closure;
 use Illuminate\Http\Request;
 
 class AuthStudent
 {
+    public function __construct(private readonly StudentDeviceManager $deviceManager)
+    {
+    }
+
     /**
      * Handle an incoming request.
      *
@@ -33,6 +38,20 @@ class AuthStudent
             // logout and redirect to login page to avoid redirect loop
             auth()->guard('student')->logout();
             return redirect('/')->with('error', 'Akun Anda terkunci. Hubungi admin.');
+        }
+
+        if (!$this->deviceManager->validateSession($student, $request)) {
+            auth()->guard('student')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            $message = 'Sesi Anda berakhir karena terdeteksi login dari perangkat lain.';
+
+            if ($request->expectsJson()) {
+                return response($message, 440);
+            }
+
+            return redirect('/')->with('error', $message);
         }
 
         //if user is logged in, continue to next middleware

@@ -765,10 +765,19 @@ class ExamController extends Controller
         }
 
         $now = Carbon::now();
+        $currentIp = request()->ip();
+        $currentAgent = (string) request()->userAgent();
+        $examGroup = $this->resolveExamGroup($grade);
 
         if (!$grade->device_token) {
             $grade->device_token = $deviceToken;
-            $grade->device_info = $deviceInfo;
+            $grade->device_info = array_replace(
+                (array) $deviceInfo,
+                array_filter([
+                    'ip_address' => $currentIp,
+                    'user_agent' => $currentAgent,
+                ])
+            );
             $grade->last_seen_at = $now;
             $grade->save();
 
@@ -776,16 +785,73 @@ class ExamController extends Controller
         }
 
         if (hash_equals($grade->device_token, (string) $deviceToken)) {
+            $existingInfo = (array) $grade->device_info;
+            $storedIp = $existingInfo['ip_address'] ?? null;
+            if ($storedIp && $currentIp && $storedIp !== $currentIp) {
+                return $this->handleDeviceViolation(
+                    $grade,
+                    $examGroup,
+                    'IP_CHANGED',
+                    'Alamat IP berbeda terdeteksi',
+                    [
+                        'expected_ip' => $storedIp,
+                        'incoming_ip' => $currentIp,
+                        'existing_device_info' => $existingInfo,
+                        'incoming_device_info' => $deviceInfo,
+                    ]
+                );
+            }
+
+            $storedAgent = $existingInfo['user_agent'] ?? null;
+            if ($storedAgent && $currentAgent && $storedAgent !== $currentAgent) {
+                return $this->handleDeviceViolation(
+                    $grade,
+                    $examGroup,
+                    'USER_AGENT_CHANGED',
+                    'Perangkat berbeda terdeteksi',
+                    [
+                        'expected_user_agent' => $storedAgent,
+                        'incoming_user_agent' => $currentAgent,
+                        'existing_device_info' => $existingInfo,
+                        'incoming_device_info' => $deviceInfo,
+                    ]
+                );
+            }
+
             $grade->last_seen_at = $now;
             if (!empty($deviceInfo)) {
-                $grade->device_info = array_replace((array) $grade->device_info, $deviceInfo);
+                $grade->device_info = array_replace(
+                    $existingInfo,
+                    (array) $deviceInfo,
+                    array_filter([
+                        'ip_address' => $storedIp ?: $currentIp,
+                        'user_agent' => $storedAgent ?: $currentAgent,
+                    ])
+                );
             }
             $grade->save();
 
             return null;
         }
+        return $this->handleDeviceViolation(
+            $grade,
+            $examGroup,
+            'MULTI_DEVICE',
+            'Perangkat berbeda terdeteksi',
+            [
+                'expected_token' => $grade->device_token,
+                'incoming_token' => $deviceToken,
+                'existing_device_info' => $grade->device_info,
+                'incoming_device_info' => $deviceInfo,
+                'incoming_ip' => $currentIp,
+                'incoming_user_agent' => $currentAgent,
+            ]
+        );
+    }
 
-        $examGroup = $this->resolveExamGroup($grade);
+    protected function handleDeviceViolation(Grade $grade, ?ExamGroup $examGroup, string $type, string $reason, array $meta = []): array
+    {
+        $now = Carbon::now();
 
         if ($examGroup) {
             CheatEvent::create([
@@ -793,18 +859,14 @@ class ExamController extends Controller
                 'exam_id' => $grade->exam_id,
                 'exam_session_id' => $grade->exam_session_id,
                 'grade_id' => $grade->id,
-                'type' => 'MULTI_DEVICE',
-                'meta' => [
-                    'expected_token' => $grade->device_token,
-                    'incoming_token' => $deviceToken,
-                    'existing_device_info' => $grade->device_info,
-                    'incoming_device_info' => $deviceInfo,
-                ],
+                'type' => $type,
+                'meta' => $meta,
             ]);
 
             $grade->cheat_count = ($grade->cheat_count ?? 0) + 1;
             $grade->cheat_status = 'LOCKED';
-            $grade->cheat_reason = 'Perangkat berbeda terdeteksi';
+            $grade->cheat_reason = $reason;
+            $grade->last_seen_at = $now;
             $grade->save();
 
             if ($examGroup->student) {
@@ -816,13 +878,17 @@ class ExamController extends Controller
             $this->finalizeGrade($grade->refresh(), $examGroup, true);
 
             return [
-                'message' => 'Perangkat berbeda terdeteksi. Ujian dikunci.',
+                'message' => $reason,
                 'redirect_to' => route('student.exams.resultExam', $examGroup->id),
             ];
         }
 
+        $grade->cheat_reason = $reason;
+        $grade->last_seen_at = $now;
+        $grade->save();
+
         return [
-            'message' => 'Perangkat berbeda terdeteksi.',
+            'message' => $reason,
             'redirect_to' => route('student.dashboard'),
         ];
     }
