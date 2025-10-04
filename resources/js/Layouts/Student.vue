@@ -4,11 +4,22 @@
             <Link class="navbar-brand me-lg-3" href="/student/dashboard">
                 <img class="navbar-brand-dark" src="/assets/images/logo.png" style="height:70px">
             </Link>
-            <div class="collapse navbar-collapse" id="navbarCollapse">
-                <ul class="navbar-nav me-auto mb-2 mb-md-0">
+            <button
+                class="navbar-toggler border-0"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#navbarCollapse"
+                aria-controls="navbarCollapse"
+                aria-expanded="false"
+                aria-label="Toggle navigation"
+            >
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse justify-content-end" id="navbarCollapse">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                 </ul>
-                <form class="d-flex" v-if="$page.props.auth.student">
-                    <Link href="/logout" method="POST" class="btn btn-secondary shadow" as="button">LOGOUT</Link>
+                <form class="d-flex mt-3 mt-lg-0" v-if="$page.props.auth.student">
+                    <Link href="/logout" method="POST" class="btn btn-secondary shadow w-100 w-lg-auto" as="button">LOGOUT</Link>
                 </form>
             </div>
         </div>

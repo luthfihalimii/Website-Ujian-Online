@@ -2,10 +2,17 @@ import { createApp, h } from 'vue'
 import { createInertiaApp } from '@inertiajs/vue3'
 import 'sweetalert2/dist/sweetalert2.min.css';
 
+const pages = import.meta.glob('./Pages/**/*.vue')
+
 createInertiaApp({
-  resolve: name => {
-    const pages = import.meta.glob('./Pages/**/*.vue', { eager: true })
-    return pages[`./Pages/${name}.vue`]
+  resolve: async name => {
+    const loadPage = pages[`./Pages/${name}.vue`]
+
+    if (!loadPage) {
+      throw new Error(`Page not found: ${name}`)
+    }
+
+    return await loadPage()
   },
   setup({ el, App, props, plugin }) {
     createApp({ render: () => h(App, props) })

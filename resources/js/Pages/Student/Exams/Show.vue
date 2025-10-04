@@ -9,16 +9,19 @@
         <div class="col-md-7">
             <div class="card border-0 shadow">
                 <div class="card-header">
-                    <div class="d-flex justify-content-between">
-                        <div>
-                            <h5 class="mb-0">Soal No. <strong class="fw-bold">{{ page }}</strong></h5>
-                        </div>
-                        <div>
-                            <VueCountdown :time="duration" @progress="handleChangeDuration" @end="showModalEndTimeExam = true" v-slot="{ hours, minutes, seconds }">
-                                <span class="badge bg-info p-2"> <i class="fa fa-clock"></i> {{ hours }} jam,
-                                    {{ minutes }} menit, {{ seconds }} detik.</span>
-                            </VueCountdown>
-                        </div>
+                    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2">
+                        <h5 class="mb-0">Soal No. <strong class="fw-bold">{{ page }}</strong></h5>
+                        <VueCountdown
+                            :time="duration"
+                            @progress="handleChangeDuration"
+                            @end="showModalEndTimeExam = true"
+                            v-slot="{ hours, minutes, seconds }"
+                        >
+                            <span class="badge bg-info p-2">
+                                <i class="fa fa-clock"></i>
+                                {{ hours }} jam, {{ minutes }} menit, {{ seconds }} detik.
+                            </span>
+                        </VueCountdown>
                     </div>
                 </div>
                 <div class="card-body">
@@ -29,22 +32,29 @@
                             <p v-html="question_active.question.question"></p>
                         </div>
 
-                        <table>
-                            <tbody>
-                                <tr v-for="(answer, index) in answer_order" :key="index">
-                                    <td width="50" style="padding: 10px;">
-
-                                        <button v-if="isOptionSelected(answer)" class="btn btn-info btn-sm w-100 shadow">{{ options[index] }}</button>
-
-                                        <button v-else @click.prevent="selectAnswer(question_active.question.id, answer)" class="btn btn-outline-info btn-sm w-100 shadow">{{ options[index] }}</button>
-
-                                    </td>
-                                    <td style="padding: 10px;">
-                                        <p v-html="question_active.question['option_'+answer]"></p>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        <div class="exam-option-list">
+                            <div
+                                v-for="(answer, index) in answer_order"
+                                :key="index"
+                                class="exam-option-item"
+                            >
+                                <div class="exam-option-item__label">
+                                    <button
+                                        type="button"
+                                        @click.prevent="selectAnswer(question_active.question.id, answer)"
+                                        :class="[
+                                            'btn btn-sm w-100 shadow exam-option-button',
+                                            isOptionSelected(answer) ? 'btn-info active' : 'btn-outline-info'
+                                        ]"
+                                    >
+                                        {{ options[index] }}
+                                    </button>
+                                </div>
+                                <div class="exam-option-item__content">
+                                    <p class="mb-0" v-html="question_active.question['option_'+answer]"></p>
+                                </div>
+                            </div>
+                        </div>
 
                     </div>
 
@@ -56,13 +66,23 @@
 
                 </div>
                 <div class="card-footer">
-                    <div class="d-flex justify-content-between">
-                        <div class="text-start">
-                            <button v-if="page > 1" @click.prevent="prevPage" type="button" class="btn btn-gray-400 btn-sm btn-block mb-2">Sebelumnya</button>
-                        </div>
-                        <div class="text-end">
-                            <button v-if="page < totalQuestions" @click.prevent="nextPage" type="button" class="btn btn-gray-400 btn-sm">Selanjutnya</button>
-                        </div>
+                    <div class="d-flex flex-column flex-sm-row justify-content-between align-items-stretch gap-2">
+                        <button
+                            v-if="page > 1"
+                            @click.prevent="prevPage"
+                            type="button"
+                            class="btn btn-gray-400 btn-sm"
+                        >
+                            Sebelumnya
+                        </button>
+                        <button
+                            v-if="page < totalQuestions"
+                            @click.prevent="nextPage"
+                            type="button"
+                            class="btn btn-gray-400 btn-sm"
+                        >
+                            Selanjutnya
+                        </button>
                     </div>
                 </div>
             </div>
@@ -74,17 +94,16 @@
                 </div>
                 <div class="card-body" style="height: 330px;overflow-y: auto">
 
-                    <div v-for="(question, index) in all_questions" :key="index">
-                        <div width="20%" style="width: 20%; float: left;">
-                            <div style="padding: 5px;">
-
-                                <button @click.prevent="clickQuestion(index)" v-if="index+1 == page" class="btn btn-gray-400 btn-sm w-100">{{ index + 1 }}</button>
-
-                                <button @click.prevent="clickQuestion(index)" v-if="index + 1 != page && !isQuestionAnswered(question)" class="btn btn-outline-info btn-sm w-100">{{ index + 1 }}</button>
-
-                                <button @click.prevent="clickQuestion(index)" v-if="index + 1 != page && isQuestionAnswered(question)" class="btn btn-info btn-sm w-100">{{ index + 1 }}</button>
-                            </div>
-                        </div>
+                    <div class="question-grid">
+                        <button
+                            v-for="(question, index) in all_questions"
+                            :key="index"
+                            type="button"
+                            @click.prevent="clickQuestion(index)"
+                            :class="questionButtonClass(index, question)"
+                        >
+                            {{ index + 1 }}
+                        </button>
                     </div>
 
                 </div>
@@ -352,6 +371,20 @@
 
             const isOptionSelected = (option) => recordedAnswer(props.question_active) === option;
             const isQuestionAnswered = (record) => recordedAnswer(record) !== 0;
+
+            const questionButtonClass = (index, question) => {
+                const classes = ['btn', 'btn-sm', 'w-100', 'question-grid__button', 'shadow-sm'];
+
+                if (index + 1 === props.page) {
+                    classes.push('btn-gray-400', 'active');
+                } else if (isQuestionAnswered(question)) {
+                    classes.push('btn-info');
+                } else {
+                    classes.push('btn-outline-info');
+                }
+
+                return classes.join(' ');
+            };
 
             const seedAnswersFromServer = (records = []) => {
                 records.forEach((record) => {
@@ -881,6 +914,7 @@
                 answeredCount,
                 isOptionSelected,
                 isQuestionAnswered,
+                questionButtonClass,
                 isOffline,
             };
         }
