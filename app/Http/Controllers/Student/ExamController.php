@@ -417,8 +417,27 @@ class ExamController extends Controller
 
         $questionId = (int) $request->question_id;
         $answerValue = (int) $request->answer;
+        $timeSpentMs = max(0, (int) $request->input('time_spent_ms', 0));
+        $now = Carbon::now();
+        $lastAnsweredAt = $grade->last_answered_at;
+        $idleDurationMs = $lastAnsweredAt ? max(0, $lastAnsweredAt->diffInMilliseconds($now)) : null;
 
-        $this->handleAnswerSubmission($grade->refresh(), $exam_group, $questionId, $answerValue);
+        $violation = $this->handleAnswerSubmission(
+            $grade->refresh(),
+            $exam_group,
+            $questionId,
+            $answerValue,
+            $timeSpentMs,
+            $idleDurationMs,
+            $now
+        );
+
+        if ($violation) {
+            return $this->violationResponse($request, $violation);
+        }
+
+        $grade->last_answered_at = $now;
+        $grade->save();
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -643,14 +662,21 @@ class ExamController extends Controller
     /**
      * Persist a student's answer for a specific question.
      */
-    protected function handleAnswerSubmission(Grade $grade, ExamGroup $exam_group, int $questionId, int $answerValue): void
-    {
+    protected function handleAnswerSubmission(
+        Grade $grade,
+        ExamGroup $exam_group,
+        int $questionId,
+        int $answerValue,
+        int $timeSpentMs = 0,
+        ?int $idleDurationMs = null,
+        ?Carbon $interactionTime = null
+    ): ?array {
         $answerValue = max(0, min(5, $answerValue));
 
         $question = Question::find($questionId);
 
         if (!$question || $question->exam_id !== $grade->exam_id) {
-            return;
+            return null;
         }
 
         $answer = Answer::where('exam_id', $grade->exam_id)
@@ -660,12 +686,107 @@ class ExamController extends Controller
             ->first();
 
         if (!$answer) {
-            return;
+            return null;
+        }
+
+        $interactionTime ??= Carbon::now();
+
+        $timeSpentMs = max(0, $timeSpentMs);
+        if ($timeSpentMs > 0) {
+            $answer->time_spent_ms = max(0, (int) $answer->time_spent_ms) + $timeSpentMs;
         }
 
         $answer->answer = $answerValue;
         $answer->is_correct = ($answerValue !== 0 && (int) $question->answer === $answerValue) ? 'Y' : 'N';
         $answer->save();
+
+        if ($timeSpentMs > 0 || ($idleDurationMs !== null && $idleDurationMs > 0)) {
+            if ($violation = $this->detectSuspiciousSpeed(
+                $grade,
+                $exam_group,
+                $answer,
+                $timeSpentMs,
+                $idleDurationMs,
+                $interactionTime
+            )) {
+                return $violation;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Flag suspiciously fast answers after an extended idle period.
+     */
+    protected function detectSuspiciousSpeed(
+        Grade $grade,
+        ExamGroup $examGroup,
+        Answer $answer,
+        int $timeSpentMs,
+        ?int $idleDurationMs,
+        Carbon $interactionTime
+    ): ?array {
+        $idleThresholdMs = 120000; // 2 minutes
+        $speedThresholdMs = 1500; // 1.5 seconds
+
+        if ($idleDurationMs === null || $idleDurationMs < $idleThresholdMs) {
+            return null;
+        }
+
+        if ($timeSpentMs <= 0 || $timeSpentMs > $speedThresholdMs) {
+            return null;
+        }
+
+        if ((int) $answer->answer === 0) {
+            return null;
+        }
+
+        $threshold = 3;
+
+        CheatEvent::create([
+            'student_id' => $grade->student_id,
+            'exam_id' => $grade->exam_id,
+            'exam_session_id' => $grade->exam_session_id,
+            'grade_id' => $grade->id,
+            'type' => 'SUSPICIOUS_SPEED',
+            'meta' => [
+                'question_id' => $answer->question_id,
+                'time_spent_ms' => $timeSpentMs,
+                'idle_duration_ms' => $idleDurationMs,
+            ],
+        ]);
+
+        $grade->cheat_count = ($grade->cheat_count ?? 0) + 1;
+        $grade->last_cheat_at = $interactionTime;
+        $grade->cheat_status = $grade->cheat_count > $threshold ? 'LOCKED' : 'WARNED';
+        $grade->save();
+
+        if ($grade->cheat_count <= $threshold) {
+            return null;
+        }
+
+        $grade->cheat_reason = 'Jawaban terlalu cepat setelah idle panjang';
+        $grade->end_time = $interactionTime;
+        $grade->total_correct = 0;
+        $grade->grade = 0;
+        $grade->duration = 0;
+        $grade->save();
+
+        if ($examGroup->student) {
+            $examGroup->student->is_locked = true;
+            $examGroup->student->locked_at = $interactionTime;
+            $examGroup->student->save();
+        }
+
+        $this->finalizeGrade($grade->refresh(), $examGroup, true);
+
+        return [
+            'success' => false,
+            'message' => 'Aktivitas mencurigakan terdeteksi. Ujian dikunci.',
+            'redirect_to' => route('student.exams.resultExam', $examGroup->id),
+            'code' => 423,
+        ];
     }
 
     public function autoSave(Request $request)
@@ -679,6 +800,7 @@ class ExamController extends Controller
             'answers' => 'required|array|min:1',
             'answers.*.question_id' => 'required|integer',
             'answers.*.answer' => 'required|integer|min:0|max:5',
+            'answers.*.time_spent_ms' => 'nullable|integer|min:0|max:86400000',
             'device_token' => 'nullable|string|max:100',
             'device_info' => 'nullable|array',
         ]);
@@ -740,12 +862,39 @@ class ExamController extends Controller
             ], 423);
         }
 
+        $now = Carbon::now();
+        $lastAnsweredAt = $grade->last_answered_at ? Carbon::parse($grade->last_answered_at) : null;
+        $idleDurationMs = $lastAnsweredAt ? max(0, $lastAnsweredAt->diffInMilliseconds($now)) : null;
+
         $synced = [];
+        $processed = false;
         foreach ($validated['answers'] as $payload) {
             $questionId = (int) $payload['question_id'];
             $answerValue = (int) $payload['answer'];
-            $this->handleAnswerSubmission($grade->refresh(), $exam_group, $questionId, $answerValue);
+            $timeSpentMs = isset($payload['time_spent_ms']) ? max(0, (int) $payload['time_spent_ms']) : 0;
+
+            $violation = $this->handleAnswerSubmission(
+                $grade->refresh(),
+                $exam_group,
+                $questionId,
+                $answerValue,
+                $timeSpentMs,
+                $idleDurationMs,
+                $now
+            );
+
+            if ($violation) {
+                return response()->json($violation, 423);
+            }
+
             $synced[] = $questionId;
+            $processed = true;
+            $idleDurationMs = null;
+        }
+
+        if ($processed) {
+            $grade->last_answered_at = $now;
+            $grade->save();
         }
 
         return response()->json([

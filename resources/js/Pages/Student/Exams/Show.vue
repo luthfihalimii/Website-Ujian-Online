@@ -218,6 +218,12 @@
 
             const selectedAnswers = reactive({});
             const pendingAnswers = reactive({});
+            const totalTimePerQuestion = reactive({});
+
+            const questionTimer = reactive({
+                questionId: null,
+                startedAt: null,
+            });
 
             const isOffline = ref(false);
             const serverTimeOffset = ref(0);
@@ -332,7 +338,71 @@
                 return String(questionId);
             };
 
+            const ensurePendingEntry = (key) => {
+                if (!key) {
+                    return null;
+                }
+
+                if (!pendingAnswers[key]) {
+                    pendingAnswers[key] = {
+                        answer: Number(selectedAnswers[key] ?? 0),
+                        time_spent_ms: 0,
+                    };
+                }
+
+                return pendingAnswers[key];
+            };
+
+            const addTimeForQuestion = (questionId, delta) => {
+                if (!questionId || !Number.isFinite(delta) || delta <= 0) {
+                    return;
+                }
+
+                totalTimePerQuestion[questionId] = (totalTimePerQuestion[questionId] ?? 0) + delta;
+
+                const entry = ensurePendingEntry(questionId);
+                if (!entry) {
+                    return;
+                }
+
+                entry.time_spent_ms = (entry.time_spent_ms ?? 0) + delta;
+            };
+
+            const commitCurrentQuestionTime = () => {
+                const questionId = questionTimer.questionId;
+                if (!questionId || questionTimer.startedAt === null) {
+                    return;
+                }
+
+                const now = getServerNow();
+                let delta = now - questionTimer.startedAt;
+                questionTimer.startedAt = now;
+
+                if (!Number.isFinite(delta) || delta <= 0) {
+                    return;
+                }
+
+                addTimeForQuestion(questionId, delta);
+            };
+
+            const startQuestionTimer = (questionId) => {
+                const key = getQuestionKey(questionId);
+                if (!key) {
+                    return;
+                }
+
+                if (questionTimer.questionId && questionTimer.questionId !== key) {
+                    commitCurrentQuestionTime();
+                }
+
+                questionTimer.questionId = key;
+                questionTimer.startedAt = getServerNow();
+                ensurePendingEntry(key);
+            };
+
             const saveLocalState = () => {
+                commitCurrentQuestionTime();
+
                 if (typeof window === 'undefined') {
                     return;
                 }
@@ -345,13 +415,27 @@
 
                     const pendingCopy = {};
                     Object.keys(pendingAnswers).forEach((key) => {
-                        pendingCopy[key] = pendingAnswers[key];
+                        const entry = pendingAnswers[key];
+                        pendingCopy[key] = {
+                            answer: Number(entry?.answer ?? selectedAnswers[key] ?? 0),
+                            time_spent_ms: Math.max(0, Number(entry?.time_spent_ms ?? 0)),
+                        };
+                    });
+
+                    const timeCopy = {};
+                    Object.keys(totalTimePerQuestion).forEach((key) => {
+                        timeCopy[key] = Math.max(0, Number(totalTimePerQuestion[key] ?? 0));
                     });
 
                     window.localStorage.setItem(storageKey, JSON.stringify({
                         answers: answersCopy,
                         pending: pendingCopy,
                         duration: duration.value,
+                        question_times: timeCopy,
+                        timer: {
+                            questionId: questionTimer.questionId,
+                            startedAt: questionTimer.startedAt,
+                        },
                         updated_at: Date.now(),
                     }));
                 } catch (_) {
@@ -360,6 +444,8 @@
             };
 
             const clearLocalState = () => {
+                commitCurrentQuestionTime();
+
                 if (typeof window === 'undefined') {
                     return;
                 }
@@ -369,6 +455,17 @@
                 } catch (_) {
                     // ignore
                 }
+
+                Object.keys(pendingAnswers).forEach((key) => {
+                    delete pendingAnswers[key];
+                });
+
+                Object.keys(totalTimePerQuestion).forEach((key) => {
+                    delete totalTimePerQuestion[key];
+                });
+
+                questionTimer.questionId = null;
+                questionTimer.startedAt = null;
             };
 
             const loadLocalState = () => {
@@ -395,11 +492,32 @@
 
                     if (parsed.pending) {
                         Object.entries(parsed.pending).forEach(([key, value]) => {
-                            const numeric = Number(value);
-                            if (!Number.isNaN(numeric)) {
-                                pendingAnswers[key] = numeric;
+                            if (value && typeof value === 'object') {
+                                pendingAnswers[key] = {
+                                    answer: Number(value.answer ?? selectedAnswers[key] ?? 0),
+                                    time_spent_ms: Math.max(0, Number(value.time_spent_ms ?? 0)),
+                                };
+                            } else {
+                                pendingAnswers[key] = {
+                                    answer: Number(value ?? selectedAnswers[key] ?? 0),
+                                    time_spent_ms: 0,
+                                };
                             }
                         });
+                    }
+
+                    if (parsed.question_times) {
+                        Object.entries(parsed.question_times).forEach(([key, value]) => {
+                            const numeric = Number(value);
+                            if (Number.isFinite(numeric) && numeric >= 0) {
+                                totalTimePerQuestion[key] = numeric;
+                            }
+                        });
+                    }
+
+                    if (parsed.timer && parsed.timer.questionId) {
+                        questionTimer.questionId = String(parsed.timer.questionId);
+                        questionTimer.startedAt = getServerNow();
                     }
 
                     if (parsed.duration && Number.isFinite(parsed.duration)) {
@@ -419,7 +537,11 @@
                         const selected = Number(selectedAnswers[key] ?? 0);
                         const serverValue = serverAnswers[key] ?? 0;
                         if (selected !== serverValue && selected !== 0) {
-                            pendingAnswers[key] = selected;
+                            const existing = pendingAnswers[key] ?? {};
+                            pendingAnswers[key] = {
+                                answer: selected,
+                                time_spent_ms: Math.max(0, Number(existing.time_spent_ms ?? 0)),
+                            };
                         }
                     });
                 } catch (_) {
@@ -487,10 +609,13 @@
                     return;
                 }
 
+                startQuestionTimer(questionId);
+                ensurePendingEntry(questionId);
+
                 if (selectedAnswers[questionId] === undefined && record?.answer) {
                     selectedAnswers[questionId] = Number(record.answer);
                 }
-            });
+            }, { immediate: true });
 
             const finalizeAndRedirect = async (payload = null, icon = 'warning') => {
                 if (durationFinalized) {
@@ -559,19 +684,21 @@
                     return;
                 }
 
+                commitCurrentQuestionTime();
+
                 const keys = Object.keys(pendingAnswers);
-                if (!keys.length) {
+                if (!keys.length || !gradeId) {
                     return;
                 }
 
-                if (!gradeId) {
-                    return;
-                }
-
-                const payload = keys.map((key) => ({
-                    question_id: Number(key),
-                    answer: Number(pendingAnswers[key]),
-                }));
+                const payload = keys.map((key) => {
+                    const entry = pendingAnswers[key] ?? {};
+                    return {
+                        question_id: Number(key),
+                        answer: Number(entry.answer ?? selectedAnswers[key] ?? 0),
+                        time_spent_ms: Math.max(0, Math.round(Number(entry.time_spent_ms ?? 0))),
+                    };
+                }).filter((item) => Number.isFinite(item.question_id) && (!Number.isNaN(item.answer) || item.time_spent_ms > 0));
 
                 if (!payload.length) {
                     return;
@@ -589,13 +716,17 @@
                         device_info: deviceInfo,
                     });
 
-                    if (Array.isArray(data?.synced_answers)) {
+                    if (Array.isArray(data?.synced_answers) && data.synced_answers.length) {
                         data.synced_answers.forEach((questionId) => {
                             const key = getQuestionKey(questionId);
-                            const sent = payload.find((entry) => entry.question_id === Number(questionId));
-                            if (sent && pendingAnswers[key] === sent.answer) {
-                                delete pendingAnswers[key];
+                            if (!key) {
+                                return;
                             }
+                            delete pendingAnswers[key];
+                        });
+                    } else {
+                        keys.forEach((key) => {
+                            delete pendingAnswers[key];
                         });
                     }
 
@@ -623,9 +754,17 @@
                     return;
                 }
 
+                commitCurrentQuestionTime();
+
                 const numeric = Number(answerValue);
                 selectedAnswers[key] = numeric;
-                pendingAnswers[key] = numeric;
+                const entry = ensurePendingEntry(key) ?? {};
+                entry.answer = numeric;
+                entry.time_spent_ms = entry.time_spent_ms ?? 0;
+                pendingAnswers[key] = {
+                    answer: entry.answer,
+                    time_spent_ms: entry.time_spent_ms,
+                };
 
                 saveLocalState();
                 flushPendingAnswers();
@@ -688,6 +827,9 @@
                     return;
                 }
 
+                commitCurrentQuestionTime();
+                await flushPendingAnswers();
+
                 const ok = await persistDuration();
                 if (!ok) {
                     return;
@@ -701,6 +843,9 @@
                 if (durationFinalized) {
                     return;
                 }
+
+                commitCurrentQuestionTime();
+                await flushPendingAnswers();
 
                 const ok = await persistDuration();
                 if (!ok) {
@@ -716,6 +861,9 @@
                     return;
                 }
 
+                commitCurrentQuestionTime();
+                await flushPendingAnswers();
+
                 const ok = await persistDuration();
                 if (!ok) {
                     return;
@@ -729,6 +877,9 @@
                 if (durationFinalized) {
                     return;
                 }
+
+                commitCurrentQuestionTime();
+                await flushPendingAnswers();
 
                 const ok = await persistDuration();
                 if (!ok) {
@@ -1037,6 +1188,9 @@
                 if (typeof window === 'undefined') {
                     return;
                 }
+
+                commitCurrentQuestionTime();
+                flushPendingAnswers();
 
                 document.removeEventListener('visibilitychange', handleVisibility);
                 window.removeEventListener('blur', handleBlur);

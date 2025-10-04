@@ -27,11 +27,13 @@ class Grade extends Model
         'device_token',
         'device_info',
         'last_seen_at',
+        'last_answered_at',
     ];
 
     protected $casts = [
         'last_cheat_at' => 'datetime',
         'last_seen_at' => 'datetime',
+        'last_answered_at' => 'datetime',
         'device_info' => 'array',
     ];
 

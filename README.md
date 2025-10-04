@@ -75,6 +75,7 @@ Tambahkan data siswa melalui menu Admin `Siswa` atau impor dengan template Excel
 - Deteksi kejadian: pergantian tab/jendela, keluar fullscreen, membuka developer tools, klik kanan, shortcut copy/paste/cut/select all.
 - Penguncian IP & perangkat: login baru dari alamat IP atau user agent berbeda langsung memutus sesi lama dan mencatat pelanggaran.
 - Deteksi screenshot / screen recording: kombinasi listener shortcut, patch `getDisplayMedia`, dan fingerprint canvas untuk mendeteksi perubahan layar mencurigakan.
+- Pelacakan waktu per soal dan flag jawaban yang terlalu cepat setelah periode idle panjang.
 - Setiap kejadian dicatat dengan timestamp dan alamat IP ke tabel `cheat_events` dan muncul pada menu Admin `Monitoring Kecurangan`.
 - Setelah 3 pelanggaran, akun siswa terkunci dan ujian otomatis berakhir dengan skor 0.
 - Sinkronisasi waktu ujian menggunakan waktu server; manipulasi waktu lokal akan terdeteksi sebagai kecurangan.

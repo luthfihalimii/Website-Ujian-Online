@@ -19,6 +19,7 @@ class Answer extends Model
         'question_order',
         'answer_order',
         'answer',
+        'time_spent_ms',
         'is_correct',
     ];
 
